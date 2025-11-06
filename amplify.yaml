@@ -1,22 +1,4 @@
 version: 1
-<<<<<<< HEAD
-frontend:
-  phases:
-    preBuild:
-      commands:
-        - cd frontend
-        - npm ci
-    build:
-      commands:
-        - npm run build
-  artifacts:
-    baseDirectory: frontend/.next
-    files:
-      - '**/*'
-  cache:
-    paths:
-      - frontend/node_modules/**/*
-=======
 applications:
   - appRoot: frontend
     frontend:
@@ -29,12 +11,15 @@ applications:
             - echo "Building Next.js application..."
             - npm run build
             - echo "Build completed successfully"
+            - echo "Preparing standalone deployment..."
+            - cp -r .next/standalone/. .next/standalone-output/
+            - cp -r .next/static .next/standalone-output/.next/
+            - cp -r public .next/standalone-output/
       artifacts:
-        baseDirectory: .
+        baseDirectory: .next/standalone-output
         files:
           - '**/*'
       cache:
         paths:
           - node_modules/**/*
           - .next/cache/**/*
->>>>>>> feature/new-ui
