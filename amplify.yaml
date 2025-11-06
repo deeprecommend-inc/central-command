@@ -12,9 +12,13 @@ applications:
             - npm run build
             - echo "Build completed successfully"
             - echo "Preparing standalone deployment..."
+            - mkdir -p .next/standalone-output
             - cp -r .next/standalone/. .next/standalone-output/
             - cp -r .next/static .next/standalone-output/.next/
             - cp -r public .next/standalone-output/
+            - cp .next/required-server-files.json .next/standalone-output/.next/
+            - cp .next/prerender-manifest.json .next/standalone-output/.next/
+            - cp .next/routes-manifest.json .next/standalone-output/.next/
       artifacts:
         baseDirectory: .next/standalone-output
         files:
