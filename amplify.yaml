@@ -1,4 +1,5 @@
 version: 1
+<<<<<<< HEAD
 frontend:
   phases:
     preBuild:
@@ -15,3 +16,25 @@ frontend:
   cache:
     paths:
       - frontend/node_modules/**/*
+=======
+applications:
+  - appRoot: frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - echo "Building Next.js application..."
+            - npm run build
+            - echo "Build completed successfully"
+      artifacts:
+        baseDirectory: .
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - .next/cache/**/*
+>>>>>>> feature/new-ui

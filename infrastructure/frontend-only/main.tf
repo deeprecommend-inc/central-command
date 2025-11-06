@@ -74,8 +74,9 @@ resource "aws_amplify_app" "frontend" {
 
   # 環境変数
   environment_variables = {
-    NEXT_PUBLIC_API_URL = var.backend_api_url
-    _LIVE_UPDATES       = jsonencode([
+    NEXT_PUBLIC_API_URL          = var.backend_api_url
+    AMPLIFY_MONOREPO_APP_ROOT    = "frontend"
+    _LIVE_UPDATES                = jsonencode([
       {
         pkg     = "next"
         type    = "npm"
@@ -97,32 +98,8 @@ resource "aws_amplify_app" "frontend" {
     target = "/index.html"
   }
 
-  # カスタムヘッダー（セキュリティ）
-  custom_headers = <<-EOT
-    customHeaders:
-      - pattern: '**/*'
-        headers:
-          - key: 'X-Frame-Options'
-            value: 'SAMEORIGIN'
-          - key: 'X-Content-Type-Options'
-            value: 'nosniff'
-          - key: 'X-XSS-Protection'
-            value: '1; mode=block'
-          - key: 'Strict-Transport-Security'
-            value: 'max-age=31536000; includeSubDomains'
-      - pattern: '_next/static/**/*'
-        headers:
-          - key: 'Cache-Control'
-            value: 'public, max-age=31536000, immutable'
-      - pattern: 'public/**/*'
-        headers:
-          - key: 'Cache-Control'
-            value: 'public, max-age=31536000, immutable'
-      - pattern: '*.png'
-        headers:
-          - key: 'Cache-Control'
-            value: 'public, max-age=31536000, immutable'
-  EOT
+  # カスタムヘッダーはNext.js config (next.config.js)で管理されます
+  # Amplifyのmonorepo構造との互換性のため
 
   # プラットフォーム設定
   platform = "WEB_COMPUTE"
@@ -147,7 +124,8 @@ resource "aws_amplify_branch" "main" {
   stage     = var.environment == "production" ? "PRODUCTION" : "DEVELOPMENT"
 
   environment_variables = {
-    NEXT_PUBLIC_API_URL = var.backend_api_url
+    NEXT_PUBLIC_API_URL          = var.backend_api_url
+    AMPLIFY_MONOREPO_APP_ROOT    = "frontend"
   }
 
   tags = {
