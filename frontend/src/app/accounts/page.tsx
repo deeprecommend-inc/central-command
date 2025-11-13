@@ -313,7 +313,7 @@ export default function AccountsPage() {
                       </td>
                       <td className="px-4 py-3 text-sm font-mono">
                         <div className="flex items-center gap-2">
-                          <span className="text-gray-600">••••••••</span>
+                          <span className="text-gray-800">{account.password}</span>
                           <button
                             onClick={() => copyToClipboard(account.password, 'パスワード')}
                             className="text-gray-400 hover:text-gray-600"
