@@ -15,7 +15,8 @@ from ..models.database import (
     LogLevelEnum,
     PlatformEnum,
     AccountGenStatusEnum,
-    StatusEnum
+    StatusEnum,
+    ExecutionModeEnum
 )
 from ..services.audit_service import audit_log
 
@@ -38,6 +39,7 @@ class AccountGenerationTaskCreate(BaseModel):
     mulogin_group_id: Optional[str] = None
     batch_size: int = 100
     headless: bool = True
+    execution_mode: str = "selenium"  # "requests" or "selenium"
 
 
 def generate_username(pattern: str, index: int) -> str:
@@ -81,6 +83,12 @@ async def create_generation_task(
     except KeyError:
         raise HTTPException(status_code=400, detail=f"Invalid platform: {task_data.platform}")
 
+    # Validate execution mode
+    try:
+        execution_mode_enum = ExecutionModeEnum[task_data.execution_mode.upper()]
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Invalid execution_mode: {task_data.execution_mode}. Must be 'requests' or 'selenium'")
+
     # Create generation task
     task = AccountGenerationTask(
         platform=platform_enum,
@@ -99,6 +107,7 @@ async def create_generation_task(
         use_mulogin=task_data.use_mulogin,
         mulogin_group_id=task_data.mulogin_group_id,
         headless=task_data.headless,
+        execution_mode=execution_mode_enum,
         status=AccountGenStatusEnum.PENDING,
         created_by=1  # TODO: Get from authenticated user
     )
@@ -167,6 +176,7 @@ async def list_generation_tasks(
                 "completed_count": task.completed_count,
                 "failed_count": task.failed_count,
                 "status": task.status.value,
+                "execution_mode": task.execution_mode.value,
                 "generation_config": task.generation_config,
                 "proxy_list": task.proxy_list,
                 "use_residential_proxy": task.use_residential_proxy,

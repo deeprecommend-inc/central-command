@@ -12,6 +12,7 @@ interface GenerationTask {
   completed_count: number;
   failed_count: number;
   status: string;
+  execution_mode: string;
   generation_config: {
     username_pattern: string;
     email_domain: string;
@@ -59,6 +60,7 @@ export default function AccountGenerationPage() {
   const [formData, setFormData] = useState({
     platform: 'youtube',
     target_count: 10,
+    execution_mode: 'selenium',
     username_pattern: 'user_{}',
     email_domain: 'temp-mail.com',
     phone_provider: '',
@@ -101,6 +103,7 @@ export default function AccountGenerationPage() {
     const taskData = {
       platform: formData.platform,
       target_count: formData.target_count,
+      execution_mode: formData.execution_mode,
       username_pattern: formData.username_pattern,
       email_domain: formData.email_domain,
       phone_provider: formData.phone_provider || null,
@@ -129,6 +132,7 @@ export default function AccountGenerationPage() {
         setFormData({
           platform: 'youtube',
           target_count: 10,
+          execution_mode: 'selenium',
           username_pattern: 'user_{}',
           email_domain: 'temp-mail.com',
           phone_provider: '',
@@ -394,6 +398,7 @@ export default function AccountGenerationPage() {
                         <div>
                           <h4 className="font-semibold mb-1">実行設定</h4>
                           <div className="space-y-1 text-muted-foreground">
+                            <div>実行モード: {task.execution_mode === 'selenium' ? '🌐 Selenium/Playwright' : '⚡ Requests/HTTP'}</div>
                             <div>プロキシ: {task.proxy_list.length > 0 ? `${task.proxy_list.length}件` : 'デフォルト'}</div>
                             <div>レジデンシャルプロキシ: {task.use_residential_proxy ? '有効' : '無効'}</div>
                             <div>ヘッドレスモード: {task.headless ? '有効' : '無効'}</div>
@@ -573,6 +578,41 @@ export default function AccountGenerationPage() {
                     </div>
                   </div>
 
+                  {/* 実行モード選択 */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2">実行モード</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, execution_mode: 'selenium' })}
+                        className={`p-4 border rounded-lg text-left transition-colors ${
+                          formData.execution_mode === 'selenium'
+                            ? 'border-primary bg-accent'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      >
+                        <div className="font-medium text-sm mb-1">🌐 Selenium/Playwright（推奨）</div>
+                        <div className="text-xs text-muted-foreground">
+                          ブラウザ自動化。人間に近い動作で検知されにくい。
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, execution_mode: 'requests' })}
+                        className={`p-4 border rounded-lg text-left transition-colors ${
+                          formData.execution_mode === 'requests'
+                            ? 'border-primary bg-accent'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                      >
+                        <div className="font-medium text-sm mb-1">⚡ Requests/HTTP</div>
+                        <div className="text-xs text-muted-foreground">
+                          API直接呼び出し。高速だが検知される可能性あり。
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
                   {/* 生成数 */}
                   <div>
                     <label className="block text-sm font-medium mb-2">生成数</label>
@@ -711,6 +751,7 @@ export default function AccountGenerationPage() {
                         setFormData({
                           platform: 'youtube',
                           target_count: 10,
+                          execution_mode: 'selenium',
                           username_pattern: 'user_{}',
                           email_domain: 'temp-mail.com',
                           phone_provider: '',

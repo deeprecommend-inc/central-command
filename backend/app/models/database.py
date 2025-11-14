@@ -26,6 +26,12 @@ class EngineTypeEnum(str, enum.Enum):
     BROWSER_QA = "browser_qa"
 
 
+class ExecutionModeEnum(str, enum.Enum):
+    """実行モード"""
+    REQUESTS = "requests"  # Requests/HTTPライブラリ使用（高速、API直接）
+    SELENIUM = "selenium"  # Selenium/Playwright使用（ブラウザ自動化）
+
+
 class StatusEnum(str, enum.Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"
@@ -67,6 +73,7 @@ class Run(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     platform = Column(SQLEnum(PlatformEnum), nullable=False, index=True)
     engine = Column(SQLEnum(EngineTypeEnum), default=EngineTypeEnum.API_FAST)
+    execution_mode = Column(SQLEnum(ExecutionModeEnum), default=ExecutionModeEnum.SELENIUM, nullable=False)  # requests or selenium
     schedule_json = Column(JSON, nullable=False)  # start, end, repeat, timezone
     observability_json = Column(JSON, nullable=False)  # 16 categories thresholds
     prompt_json = Column(JSON, nullable=False)  # AI generation parameters
@@ -297,6 +304,9 @@ class AccountGenerationTask(Base):
     # Mulogin設定
     use_mulogin = Column(Boolean, default=True)  # Mulogin使用
     mulogin_group_id = Column(String(255))  # Mulginグループグループ
+
+    # 実行モード
+    execution_mode = Column(SQLEnum(ExecutionModeEnum), default=ExecutionModeEnum.SELENIUM, nullable=False)  # requests or selenium
 
     # ブラウザ設定
     headless = Column(Boolean, default=True)
