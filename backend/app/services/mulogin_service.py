@@ -6,6 +6,7 @@ Mulogin API連携サービス
 import httpx
 from typing import Dict, Any, Optional, List
 from ..core.config import settings
+from .user_agent_manager import user_agent_manager
 
 
 class MuloginService:
@@ -206,11 +207,13 @@ class MuloginService:
         raise ValueError(f"Invalid proxy format: {proxy}")
 
     def _generate_random_ua(self, persona: Optional[Dict[str, Any]] = None) -> str:
-        """ペルソナに基づいてUser-Agentを生成"""
-        if persona and persona.get("preferred_device") == "mobile":
-            return "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"
+        """
+        ペルソナに基づいてUser-Agentを生成
 
-        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        user_agent_managerを使用して最新のUser-Agentを取得
+        3ヶ月ごとに自動更新される
+        """
+        return user_agent_manager.get_user_agent_for_persona(persona)
 
     def _get_geolocation(self, persona: Dict[str, Any]) -> Dict[str, float]:
         """ペルソナに基づいて位置情報を取得"""
