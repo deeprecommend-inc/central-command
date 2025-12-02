@@ -144,6 +144,12 @@ export default function Dashboard() {
               >
                 ブラウザアクション (AI自動化)
               </a>
+              <a
+                href="/settings"
+                className="block w-full px-4 py-2 text-sm font-medium text-center border rounded-md hover:bg-accent"
+              >
+                設定 (LLM APIキー)
+              </a>
             </CardContent>
           </Card>
 
@@ -261,6 +267,13 @@ export default function Dashboard() {
               >
                 <div className="font-semibold">ブラウザアクション</div>
                 <div className="text-xs text-muted-foreground">AI駆動ブラウザ自動化</div>
+              </a>
+              <a
+                href="/settings"
+                className="block px-4 py-2 text-sm border rounded-md hover:bg-accent"
+              >
+                <div className="font-semibold">設定</div>
+                <div className="text-xs text-muted-foreground">LLM APIキー・システム設定</div>
               </a>
             </CardContent>
           </Card>

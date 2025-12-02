@@ -7,15 +7,40 @@ This module integrates browser-use library for AI-driven browser automation.
 
 import asyncio
 import logging
+import base64
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from browser_use import Agent, BrowserSession, BrowserProfile, ChatAnthropic, ChatOpenAI
 from browser_use.agent.views import AgentHistoryList
+from cryptography.fernet import Fernet
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.database import LLMSetting, LLMProviderEnum, async_session_maker
 
 logger = logging.getLogger(__name__)
+
+
+def get_encryption_key() -> bytes:
+    """Get or generate encryption key for API keys"""
+    key = getattr(settings, 'ENCRYPTION_KEY', None)
+    if key:
+        return base64.urlsafe_b64decode(key)
+    secret = getattr(settings, 'SECRET_KEY', 'default-secret-key-change-me')
+    return base64.urlsafe_b64encode(secret[:32].encode().ljust(32, b'0'))
+
+
+def decrypt_api_key(encrypted_key: str) -> str:
+    """Decrypt API key"""
+    if not encrypted_key:
+        return ""
+    try:
+        f = Fernet(get_encryption_key())
+        return f.decrypt(encrypted_key.encode()).decode()
+    except Exception:
+        return ""
 
 
 class BrowserAgentService:
@@ -38,8 +63,103 @@ class BrowserAgentService:
             wait_between_actions=0.3,
         )
 
-    def _get_llm(self, llm_provider: str = "anthropic"):
-        """Get LLM instance based on provider"""
+    async def _get_llm_settings_from_db(self, provider: str = None) -> Optional[Dict[str, Any]]:
+        """Get LLM settings from database"""
+        try:
+            async with async_session_maker() as session:
+                if provider:
+                    # 指定されたプロバイダーの設定を取得
+                    try:
+                        provider_enum = LLMProviderEnum(provider.lower())
+                    except ValueError:
+                        provider_enum = None
+
+                    if provider_enum:
+                        result = await session.execute(
+                            select(LLMSetting).where(
+                                LLMSetting.provider == provider_enum,
+                                LLMSetting.is_enabled == True
+                            )
+                        )
+                        setting = result.scalar_one_or_none()
+                        if setting and setting.api_key_encrypted:
+                            # 最終使用時刻を更新
+                            setting.last_used_at = datetime.utcnow()
+                            await session.commit()
+                            return {
+                                "provider": setting.provider.value,
+                                "api_key": decrypt_api_key(setting.api_key_encrypted),
+                                "model": setting.default_model,
+                                "api_base_url": setting.api_base_url,
+                            }
+                else:
+                    # デフォルトプロバイダーを取得
+                    result = await session.execute(
+                        select(LLMSetting).where(
+                            LLMSetting.is_default == True,
+                            LLMSetting.is_enabled == True
+                        )
+                    )
+                    setting = result.scalar_one_or_none()
+
+                    if not setting:
+                        # デフォルトがなければ有効な最初のプロバイダー
+                        result = await session.execute(
+                            select(LLMSetting).where(LLMSetting.is_enabled == True).order_by(LLMSetting.provider)
+                        )
+                        setting = result.scalar_one_or_none()
+
+                    if setting and setting.api_key_encrypted:
+                        setting.last_used_at = datetime.utcnow()
+                        await session.commit()
+                        return {
+                            "provider": setting.provider.value,
+                            "api_key": decrypt_api_key(setting.api_key_encrypted),
+                            "model": setting.default_model,
+                            "api_base_url": setting.api_base_url,
+                        }
+
+        except Exception as e:
+            logger.warning(f"Failed to get LLM settings from DB: {e}")
+
+        return None
+
+    async def _get_llm(self, llm_provider: str = None):
+        """Get LLM instance based on provider - checks DB first, then env vars"""
+        # まずDBから設定を取得
+        db_settings = await self._get_llm_settings_from_db(llm_provider)
+
+        if db_settings and db_settings.get("api_key"):
+            provider = db_settings["provider"]
+            api_key = db_settings["api_key"]
+            model = db_settings["model"]
+
+            if provider == "openai":
+                return ChatOpenAI(
+                    model=model or "gpt-4o",
+                    api_key=api_key,
+                )
+            elif provider == "anthropic":
+                return ChatAnthropic(
+                    model=model or "claude-sonnet-4-20250514",
+                    api_key=api_key,
+                )
+            elif provider == "google":
+                from browser_use import ChatGoogle
+                return ChatGoogle(
+                    model=model or "gemini-2.0-flash",
+                    api_key=api_key,
+                )
+            elif provider == "groq":
+                from browser_use import ChatGroq
+                return ChatGroq(
+                    model=model or "llama-3.3-70b-versatile",
+                    api_key=api_key,
+                )
+
+        # DBに設定がない場合は環境変数にフォールバック
+        logger.info("Using environment variables for LLM configuration")
+
         if llm_provider == "openai":
             return ChatOpenAI(
                 model=getattr(settings, 'OPENAI_MODEL', 'gpt-4o'),
@@ -121,7 +241,7 @@ class BrowserAgentService:
             )
 
             # Get LLM
-            llm = self._get_llm(llm_provider)
+            llm = await self._get_llm(llm_provider)
 
             # Create browser profile
             browser_profile = self._create_browser_profile(

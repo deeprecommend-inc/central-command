@@ -6,7 +6,7 @@ import uvicorn
 from .core.config import settings
 from .models.database import init_db
 from .services.redis_service import redis_service
-from .api import oauth, runs, drafts, metrics, schedules, exports, account_generation, proxy_ips, personas, browser_actions, user_agent
+from .api import oauth, runs, drafts, metrics, schedules, exports, account_generation, proxy_ips, personas, browser_actions, user_agent, llm_settings
 
 
 @asynccontextmanager
@@ -49,6 +49,7 @@ app.include_router(account_generation.router, tags=["Account Generation"])
 app.include_router(proxy_ips.router, tags=["Proxy IPs"])
 app.include_router(personas.router, tags=["Personas"])
 app.include_router(user_agent.router, tags=["User-Agent"])
+app.include_router(llm_settings.router, tags=["LLM Settings"])
 
 
 @app.get("/")

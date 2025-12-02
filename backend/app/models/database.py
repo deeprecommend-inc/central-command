@@ -478,6 +478,67 @@ class ProxyTestResult(Base):
     tested_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+# LLM Provider Enum
+class LLMProviderEnum(str, enum.Enum):
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    GOOGLE = "google"
+    GROQ = "groq"
+
+
+# LLM Settings Table
+class LLMSetting(Base):
+    """LLM API設定"""
+    __tablename__ = "llm_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # プロバイダー情報
+    provider = Column(SQLEnum(LLMProviderEnum), nullable=False, unique=True, index=True)
+    display_name = Column(String(255), nullable=False)  # 表示名
+
+    # API設定
+    api_key_encrypted = Column(String(1000))  # 暗号化されたAPIキー
+    api_base_url = Column(String(500))  # カスタムAPIベースURL（オプション）
+    default_model = Column(String(255))  # デフォルトモデル
+
+    # ステータス
+    is_enabled = Column(Boolean, default=False)  # 有効/無効
+    is_default = Column(Boolean, default=False)  # デフォルトプロバイダー
+
+    # 使用制限
+    rate_limit_rpm = Column(Integer)  # 1分あたりのリクエスト制限
+    rate_limit_tpd = Column(Integer)  # 1日あたりのトークン制限
+
+    # メタデータ
+    settings_metadata = Column(JSON, default={})  # その他の設定
+    last_verified_at = Column(DateTime(timezone=True))  # 最後に検証された時刻
+    last_used_at = Column(DateTime(timezone=True))  # 最後に使用された時刻
+
+    # タイムスタンプ
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+# User Agents Table
+class UserAgent(Base):
+    """User-Agent管理テーブル"""
+    __tablename__ = "user_agents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_agent_string = Column(String(1000), nullable=False, unique=True)
+    browser_name = Column(String(100))
+    browser_version = Column(String(50))
+    os_name = Column(String(100))
+    os_version = Column(String(50))
+    device_type = Column(String(50))  # desktop, mobile, tablet
+    is_active = Column(Boolean, default=True, index=True)
+    usage_count = Column(Integer, default=0)
+    last_used_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 async def get_db():
     async with async_session_maker() as session:
         yield session
