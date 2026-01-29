@@ -70,6 +70,12 @@ async def run_basic_agent(urls: list[str]):
 
 async def run_ai_agent(task: str):
     """Run AI-driven browser-use agent"""
+    logger.warning("AI agent (browser-use) is currently not supported in WSL environment")
+    logger.info("Use 'python run.py url <URL>' for basic web operations")
+    logger.info("browser-use requires native Linux/Mac environment")
+    sys.exit(1)
+
+    # Disabled due to WSL compatibility issues
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
 
     openai_key = get_env("OPENAI_API_KEY")
@@ -103,6 +109,11 @@ async def run_ai_agent(task: str):
 
 async def run_parallel_ai(tasks: list[str]):
     """Run multiple AI tasks in parallel"""
+    logger.warning("AI agent (browser-use) is currently not supported in WSL environment")
+    logger.info("Use 'python run.py url <URL1> <URL2>' for parallel web operations")
+    sys.exit(1)
+
+    # Disabled due to WSL compatibility issues
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
 
     openai_key = get_env("OPENAI_API_KEY")
