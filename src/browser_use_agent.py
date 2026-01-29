@@ -6,9 +6,9 @@ from typing import Optional, Any
 from dataclasses import dataclass
 from loguru import logger
 
-from browser_use import Agent, Browser
-from browser_use.browser.profile import ProxySettings
-from langchain_openai import ChatOpenAI
+from browser_use import Agent
+from browser_use.browser.profile import BrowserProfile, ProxySettings
+from browser_use.llm import ChatOpenAI
 
 from .proxy_manager import ProxyManager, ProxyType
 from .ua_manager import UserAgentManager
@@ -69,7 +69,7 @@ class BrowserUseAgent:
         # Initialize UA manager
         self.ua_manager = UserAgentManager()
 
-        # Initialize LLM
+        # Initialize LLM (browser-use native)
         self.llm = ChatOpenAI(
             model=config.model,
             api_key=config.openai_api_key,
@@ -77,8 +77,8 @@ class BrowserUseAgent:
 
         self._session_counter = 0
 
-    def _create_browser(self) -> Browser:
-        """Create browser with proxy and UA"""
+    def _create_browser_profile(self) -> BrowserProfile:
+        """Create browser profile with proxy and UA"""
         self._session_counter += 1
         session_id = f"session_{self._session_counter}"
 
@@ -97,15 +97,15 @@ class BrowserUseAgent:
         profile = self.ua_manager.get_random_profile(session_id=session_id)
         logger.info(f"Using UA: {profile.user_agent[:60]}...")
 
-        # Create browser
-        browser = Browser(
+        # Create browser profile
+        browser_profile = BrowserProfile(
             headless=self.config.headless,
             proxy=proxy_settings,
             user_agent=profile.user_agent,
             viewport={"width": profile.viewport_width, "height": profile.viewport_height},
         )
 
-        return browser
+        return browser_profile
 
     async def run(self, task: str) -> dict[str, Any]:
         """
@@ -120,13 +120,13 @@ class BrowserUseAgent:
         """
         logger.info(f"Running task: {task[:100]}...")
 
-        browser = self._create_browser()
+        browser_profile = self._create_browser_profile()
 
         try:
             agent = Agent(
                 task=task,
                 llm=self.llm,
-                browser=browser,
+                browser_profile=browser_profile,
             )
 
             result = await agent.run()
