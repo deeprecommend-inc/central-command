@@ -19,10 +19,16 @@ class TaskResult:
     success: bool
     data: Any = None
     error: Optional[str] = None
+    retries: int = 0
 
 
 class ParallelController:
     """Manages parallel browser workers with proxy and UA rotation"""
+
+    # Retry settings
+    MAX_RETRIES = 3
+    BASE_DELAY = 1.0  # seconds
+    MAX_DELAY = 30.0  # seconds
 
     def __init__(
         self,
@@ -30,11 +36,13 @@ class ParallelController:
         ua_manager: Optional[UserAgentManager] = None,
         max_workers: int = 5,
         headless: bool = True,
+        max_retries: int = 3,
     ):
         self.proxy_manager = proxy_manager
         self.ua_manager = ua_manager or UserAgentManager()
         self.max_workers = max_workers
         self.headless = headless
+        self.max_retries = max_retries
         self._workers: dict[str, BrowserWorker] = {}
         self._semaphore = asyncio.Semaphore(max_workers)
 
@@ -64,39 +72,105 @@ class ParallelController:
             del self._workers[worker_id]
             self.ua_manager.clear_session(worker_id)
 
+    def _calculate_delay(self, attempt: int) -> float:
+        """Calculate exponential backoff delay"""
+        delay = self.BASE_DELAY * (2 ** attempt)
+        return min(delay, self.MAX_DELAY)
+
+    def _is_proxy_error(self, error: str) -> bool:
+        """Check if error is proxy-related"""
+        proxy_errors = [
+            "proxy",
+            "connection refused",
+            "connection reset",
+            "timeout",
+            "ECONNREFUSED",
+            "ETIMEDOUT",
+            "tunnel",
+        ]
+        error_lower = error.lower()
+        return any(e in error_lower for e in proxy_errors)
+
     async def run_task(
         self,
         task_id: str,
         task_fn: Callable[[BrowserWorker], Coroutine[Any, Any, WorkerResult]],
     ) -> TaskResult:
-        """Run a single task with automatic worker management"""
+        """Run a single task with automatic worker management and retry"""
         worker_id = f"worker_{task_id}"
+        last_error = None
+        retries = 0
 
         async with self._semaphore:
-            try:
-                worker = await self._create_worker(worker_id)
-                result = await task_fn(worker)
+            for attempt in range(self.max_retries + 1):
+                try:
+                    # Create worker with fresh proxy on retry
+                    worker = await self._create_worker(f"{worker_id}_attempt{attempt}")
+                    result = await task_fn(worker)
 
-                # Record proxy stats
-                if self.proxy_manager and worker.proxy and worker.proxy.session_id:
+                    # Record proxy stats
+                    if self.proxy_manager and worker.proxy and worker.proxy.session_id:
+                        if result.success:
+                            self.proxy_manager.record_success(worker.proxy.session_id)
+                        else:
+                            self.proxy_manager.record_failure(worker.proxy.session_id)
+
                     if result.success:
-                        self.proxy_manager.record_success(worker.proxy.session_id)
-                    else:
-                        self.proxy_manager.record_failure(worker.proxy.session_id)
+                        return TaskResult(
+                            worker_id=worker_id,
+                            success=True,
+                            data=result.data,
+                            retries=attempt,
+                        )
 
-                return TaskResult(
-                    worker_id=worker_id,
-                    success=result.success,
-                    data=result.data,
-                    error=result.error,
-                )
+                    # Check if we should retry
+                    last_error = result.error
+                    if attempt < self.max_retries and self._is_proxy_error(result.error or ""):
+                        delay = self._calculate_delay(attempt)
+                        logger.warning(
+                            f"Task {task_id} failed (attempt {attempt + 1}/{self.max_retries + 1}), "
+                            f"retrying in {delay:.1f}s with new proxy: {result.error}"
+                        )
+                        await self._cleanup_worker(f"{worker_id}_attempt{attempt}")
+                        await asyncio.sleep(delay)
+                        retries = attempt + 1
+                        continue
 
-            except Exception as e:
-                logger.error(f"Task {task_id} failed: {e}")
-                return TaskResult(worker_id=worker_id, success=False, error=str(e))
+                    return TaskResult(
+                        worker_id=worker_id,
+                        success=False,
+                        error=result.error,
+                        retries=attempt,
+                    )
 
-            finally:
-                await self._cleanup_worker(worker_id)
+                except Exception as e:
+                    last_error = str(e)
+                    logger.error(f"Task {task_id} exception (attempt {attempt + 1}): {e}")
+
+                    if attempt < self.max_retries and self._is_proxy_error(str(e)):
+                        delay = self._calculate_delay(attempt)
+                        logger.warning(f"Retrying in {delay:.1f}s with new proxy")
+                        await self._cleanup_worker(f"{worker_id}_attempt{attempt}")
+                        await asyncio.sleep(delay)
+                        retries = attempt + 1
+                        continue
+
+                    return TaskResult(
+                        worker_id=worker_id,
+                        success=False,
+                        error=str(e),
+                        retries=attempt,
+                    )
+
+                finally:
+                    await self._cleanup_worker(f"{worker_id}_attempt{attempt}")
+
+            return TaskResult(
+                worker_id=worker_id,
+                success=False,
+                error=f"Max retries exceeded: {last_error}",
+                retries=retries,
+            )
 
     async def run_parallel(
         self,
