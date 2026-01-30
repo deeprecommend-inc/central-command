@@ -3,8 +3,8 @@ Web Agent - Main interface for web automation with proxy and UA rotation
 """
 import asyncio
 from typing import Optional, Any
-from dataclasses import dataclass
 from loguru import logger
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from .proxy_manager import ProxyManager, ProxyType
 from .ua_manager import UserAgentManager
@@ -12,19 +12,34 @@ from .browser_worker import BrowserWorker, WorkerResult
 from .parallel_controller import ParallelController, TaskResult
 
 
-@dataclass
-class AgentConfig:
-    """Configuration for WebAgent"""
+class AgentConfig(BaseModel):
+    """Configuration for WebAgent with validation"""
 
     brightdata_username: str = ""
     brightdata_password: str = ""
     brightdata_host: str = "brd.superproxy.io"
-    brightdata_port: int = 22225
-    # Proxy type: residential, datacenter, mobile, isp
+    brightdata_port: int = Field(default=22225, ge=1, le=65535)
     proxy_type: str = "residential"
-    parallel_sessions: int = 5
+    parallel_sessions: int = Field(default=5, ge=1, le=50)
     headless: bool = True
-    max_retries: int = 3
+    max_retries: int = Field(default=3, ge=0, le=10)
+
+    @field_validator("proxy_type")
+    @classmethod
+    def validate_proxy_type(cls, v: str) -> str:
+        valid_types = {"residential", "datacenter", "mobile", "isp"}
+        if v.lower() not in valid_types:
+            raise ValueError(f"proxy_type must be one of: {valid_types}")
+        return v.lower()
+
+    @field_validator("brightdata_host")
+    @classmethod
+    def validate_host(cls, v: str) -> str:
+        if v and not v.replace(".", "").replace("-", "").replace("_", "").isalnum():
+            raise ValueError("Invalid host format")
+        return v
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class WebAgent:

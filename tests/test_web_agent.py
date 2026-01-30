@@ -2,11 +2,12 @@
 Tests for WebAgent
 """
 import pytest
+from pydantic import ValidationError
 from src.web_agent import WebAgent, AgentConfig, create_agent
 
 
 class TestAgentConfig:
-    """Tests for AgentConfig dataclass"""
+    """Tests for AgentConfig with validation"""
 
     def test_default_config(self):
         config = AgentConfig()
@@ -26,6 +27,43 @@ class TestAgentConfig:
         assert config.brightdata_username == "user"
         assert config.proxy_type == "mobile"
         assert config.parallel_sessions == 3
+
+    def test_invalid_proxy_type(self):
+        with pytest.raises(ValidationError):
+            AgentConfig(proxy_type="invalid")
+
+    def test_valid_proxy_types(self):
+        for proxy_type in ["residential", "datacenter", "mobile", "isp"]:
+            config = AgentConfig(proxy_type=proxy_type)
+            assert config.proxy_type == proxy_type
+
+    def test_proxy_type_case_insensitive(self):
+        config = AgentConfig(proxy_type="MOBILE")
+        assert config.proxy_type == "mobile"
+
+    def test_invalid_port_too_low(self):
+        with pytest.raises(ValidationError):
+            AgentConfig(brightdata_port=0)
+
+    def test_invalid_port_too_high(self):
+        with pytest.raises(ValidationError):
+            AgentConfig(brightdata_port=70000)
+
+    def test_invalid_parallel_sessions_zero(self):
+        with pytest.raises(ValidationError):
+            AgentConfig(parallel_sessions=0)
+
+    def test_invalid_parallel_sessions_too_high(self):
+        with pytest.raises(ValidationError):
+            AgentConfig(parallel_sessions=100)
+
+    def test_invalid_max_retries_negative(self):
+        with pytest.raises(ValidationError):
+            AgentConfig(max_retries=-1)
+
+    def test_extra_fields_rejected(self):
+        with pytest.raises(ValidationError):
+            AgentConfig(unknown_field="value")
 
 
 class TestWebAgent:
