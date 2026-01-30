@@ -6,7 +6,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from loguru import logger
 
 try:
@@ -14,6 +14,9 @@ try:
     HAS_AIOHTTP = True
 except ImportError:
     HAS_AIOHTTP = False
+
+if TYPE_CHECKING:
+    from .sense import EventBus, MetricsCollector
 
 
 class ProxyType(Enum):
@@ -104,6 +107,8 @@ class ProxyManager:
         host: str = "brd.superproxy.io",
         port: int = 22225,
         proxy_type: ProxyType = ProxyType.RESIDENTIAL,
+        event_bus: Optional["EventBus"] = None,
+        metrics_collector: Optional["MetricsCollector"] = None,
     ):
         self.username = username
         self.password = password
@@ -113,6 +118,8 @@ class ProxyManager:
         self._session_counter = 0
         self._country_index = 0
         self._stats: dict[str, ProxyStats] = {}
+        self._event_bus = event_bus
+        self._metrics = metrics_collector
 
         logger.info(f"ProxyManager initialized: type={proxy_type.value}, host={host}")
 
@@ -228,7 +235,31 @@ class ProxyManager:
             country_stats.consecutive_failures = 0
             country_stats.is_healthy = True
 
-    def record_failure(self, session_id: str, country: Optional[str] = None) -> None:
+        # Record metrics
+        if self._metrics:
+            self._metrics.record("proxy.request.success", 1.0, {"country": country or "unknown"})
+            self._metrics.record("proxy.response_time", response_time, {"country": country or "unknown"})
+
+        # Publish event (async-safe)
+        if self._event_bus:
+            from .sense import Event
+            import asyncio
+            event = Event(
+                event_type="proxy.success",
+                source="proxy_manager",
+                data={
+                    "session_id": session_id,
+                    "country": country,
+                    "response_time": response_time,
+                },
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._event_bus.publish(event))
+            except RuntimeError:
+                pass  # No running loop, skip event
+
+    def record_failure(self, session_id: str, country: Optional[str] = None, error: Optional[str] = None) -> None:
         """Record failed request"""
         if session_id not in self._stats:
             self._stats[session_id] = ProxyStats()
@@ -253,6 +284,30 @@ class ProxyManager:
             if country_stats.consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
                 country_stats.is_healthy = False
                 logger.warning(f"Country {country} marked unhealthy")
+
+        # Record metrics
+        if self._metrics:
+            self._metrics.record("proxy.request.failure", 1.0, {"country": country or "unknown"})
+
+        # Publish event (async-safe)
+        if self._event_bus:
+            from .sense import Event
+            import asyncio
+            event = Event(
+                event_type="proxy.failure",
+                source="proxy_manager",
+                data={
+                    "session_id": session_id,
+                    "country": country,
+                    "error": error,
+                    "consecutive_failures": stats.consecutive_failures,
+                },
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._event_bus.publish(event))
+            except RuntimeError:
+                pass  # No running loop, skip event
 
     async def health_check(self, proxy_config: Optional[ProxyConfig] = None) -> bool:
         """

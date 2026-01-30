@@ -3,13 +3,16 @@ Parallel Controller - Manages multiple browser workers with retry logic
 """
 import asyncio
 import time
-from typing import Optional, Callable, Any, Coroutine
+from typing import Optional, Callable, Any, Coroutine, TYPE_CHECKING
 from dataclasses import dataclass
 from loguru import logger
 
 from .proxy_manager import ProxyManager, ProxyConfig
 from .ua_manager import UserAgentManager, BrowserProfile
 from .browser_worker import BrowserWorker, WorkerResult, ErrorType
+
+if TYPE_CHECKING:
+    from .sense import EventBus, MetricsCollector
 
 
 @dataclass
@@ -47,6 +50,8 @@ class ParallelController:
         max_workers: int = 5,
         headless: bool = True,
         max_retries: int = 3,
+        event_bus: Optional["EventBus"] = None,
+        metrics_collector: Optional["MetricsCollector"] = None,
     ):
         self.proxy_manager = proxy_manager
         self.ua_manager = ua_manager or UserAgentManager()
@@ -55,6 +60,8 @@ class ParallelController:
         self.max_retries = max_retries
         self._workers: dict[str, BrowserWorker] = {}
         self._semaphore = asyncio.Semaphore(max_workers)
+        self._event_bus = event_bus
+        self._metrics = metrics_collector
 
     async def _create_worker(self, worker_id: str) -> BrowserWorker:
         """Create a new worker with fresh proxy and profile"""
@@ -126,6 +133,13 @@ class ParallelController:
         error_lower = error.lower()
         return any(e in error_lower for e in proxy_errors)
 
+    async def _publish_event(self, event_type: str, data: dict) -> None:
+        """Publish event to event bus if available"""
+        if self._event_bus:
+            from .sense import Event
+            event = Event(event_type=event_type, source="parallel_controller", data=data)
+            await self._event_bus.publish(event)
+
     async def run_task(
         self,
         task_id: str,
@@ -137,6 +151,9 @@ class ParallelController:
         last_error_type = None
         retries = 0
         start_time = time.time()
+
+        # Publish task started event
+        await self._publish_event("task.started", {"task_id": task_id, "worker_id": worker_id})
 
         async with self._semaphore:
             for attempt in range(self.max_retries + 1):
@@ -164,12 +181,25 @@ class ParallelController:
                             self.proxy_manager.record_failure(session_id, country=country)
 
                     if result.success:
+                        duration = time.time() - start_time
+                        # Record metrics
+                        if self._metrics:
+                            self._metrics.record("task.duration", duration, {"task_id": task_id})
+                            self._metrics.record("task.success", 1.0, {"task_id": task_id})
+                            self._metrics.increment("task.total_success")
+                        # Publish success event
+                        await self._publish_event("task.completed", {
+                            "task_id": task_id,
+                            "success": True,
+                            "retries": attempt,
+                            "duration": duration,
+                        })
                         return TaskResult(
                             worker_id=worker_id,
                             success=True,
                             data=result.data,
                             retries=attempt,
-                            duration=time.time() - start_time,
+                            duration=duration,
                         )
 
                     # Check if we should retry
@@ -184,18 +214,39 @@ class ParallelController:
                             f"retrying in {delay:.1f}s: {result.error}"
                         )
                         retries = attempt + 1
+                        # Publish retry event
+                        await self._publish_event("task.retry", {
+                            "task_id": task_id,
+                            "attempt": attempt + 1,
+                            "error": result.error,
+                            "error_type": result.error_type.value if result.error_type else "unknown",
+                        })
                         await self._cleanup_worker(current_worker_id)
                         await asyncio.sleep(delay)
                         continue
 
                     # Non-retryable error or max retries reached
+                    duration = time.time() - start_time
+                    # Record failure metrics
+                    if self._metrics:
+                        self._metrics.record("task.duration", duration, {"task_id": task_id})
+                        self._metrics.record("task.failure", 1.0, {"task_id": task_id, "error_type": result.error_type.value if result.error_type else "unknown"})
+                        self._metrics.increment("task.total_failure")
+                    # Publish failure event
+                    await self._publish_event("task.failed", {
+                        "task_id": task_id,
+                        "error": result.error,
+                        "error_type": result.error_type.value if result.error_type else "unknown",
+                        "retries": attempt,
+                        "duration": duration,
+                    })
                     return TaskResult(
                         worker_id=worker_id,
                         success=False,
                         error=result.error,
                         error_type=result.error_type,
                         retries=attempt,
-                        duration=time.time() - start_time,
+                        duration=duration,
                     )
 
                 except asyncio.CancelledError:
@@ -221,30 +272,60 @@ class ParallelController:
                         delay = self._calculate_delay(attempt)
                         logger.warning(f"Retrying in {delay:.1f}s with new proxy")
                         retries = attempt + 1
+                        await self._publish_event("task.retry", {
+                            "task_id": task_id,
+                            "attempt": attempt + 1,
+                            "error": str(e),
+                            "error_type": last_error_type.value,
+                        })
                         await self._cleanup_worker(current_worker_id)
                         await asyncio.sleep(delay)
                         continue
 
+                    duration = time.time() - start_time
+                    if self._metrics:
+                        self._metrics.record("task.duration", duration, {"task_id": task_id})
+                        self._metrics.record("task.failure", 1.0, {"task_id": task_id, "error_type": last_error_type.value})
+                        self._metrics.increment("task.total_failure")
+                    await self._publish_event("task.failed", {
+                        "task_id": task_id,
+                        "error": str(e),
+                        "error_type": last_error_type.value,
+                        "retries": attempt,
+                        "duration": duration,
+                    })
                     return TaskResult(
                         worker_id=worker_id,
                         success=False,
                         error=str(e),
                         error_type=last_error_type,
                         retries=attempt,
-                        duration=time.time() - start_time,
+                        duration=duration,
                     )
 
                 finally:
                     await self._cleanup_worker(current_worker_id)
 
             # Max retries exceeded
+            duration = time.time() - start_time
+            if self._metrics:
+                self._metrics.record("task.duration", duration, {"task_id": task_id})
+                self._metrics.record("task.failure", 1.0, {"task_id": task_id, "error_type": "max_retries"})
+                self._metrics.increment("task.total_failure")
+            await self._publish_event("task.failed", {
+                "task_id": task_id,
+                "error": f"Max retries exceeded: {last_error}",
+                "error_type": last_error_type.value if last_error_type else "unknown",
+                "retries": retries,
+                "duration": duration,
+            })
             return TaskResult(
                 worker_id=worker_id,
                 success=False,
                 error=f"Max retries exceeded: {last_error}",
                 error_type=last_error_type,
                 retries=retries,
-                duration=time.time() - start_time,
+                duration=duration,
             )
 
     async def run_parallel(

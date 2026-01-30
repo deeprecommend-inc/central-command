@@ -2,7 +2,7 @@
 Web Agent - Main interface for web automation with proxy and UA rotation
 """
 import asyncio
-from typing import Optional, Any
+from typing import Optional, Any, TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
@@ -10,6 +10,9 @@ from .proxy_manager import ProxyManager, ProxyType
 from .ua_manager import UserAgentManager
 from .browser_worker import BrowserWorker, WorkerResult
 from .parallel_controller import ParallelController, TaskResult
+
+if TYPE_CHECKING:
+    from .sense import EventBus, MetricsCollector
 
 
 class AgentConfig(BaseModel):
@@ -60,9 +63,16 @@ class WebAgent:
             await agent.cleanup()
     """
 
-    def __init__(self, config: Optional[AgentConfig] = None):
+    def __init__(
+        self,
+        config: Optional[AgentConfig] = None,
+        event_bus: Optional["EventBus"] = None,
+        metrics_collector: Optional["MetricsCollector"] = None,
+    ):
         self.config = config or AgentConfig()
         self._closed = False
+        self._event_bus = event_bus
+        self._metrics = metrics_collector
 
         # Initialize proxy manager if credentials provided
         self.proxy_manager = None
@@ -84,6 +94,8 @@ class WebAgent:
                 host=self.config.brightdata_host,
                 port=self.config.brightdata_port,
                 proxy_type=proxy_type,
+                event_bus=event_bus,
+                metrics_collector=metrics_collector,
             )
             proxy_label = f"{proxy_type.value}" if proxy_type != ProxyType.RESIDENTIAL else f"{proxy_type.value} (default)"
             logger.info(f"Proxy enabled: type={proxy_label}")
@@ -97,6 +109,8 @@ class WebAgent:
             max_workers=self.config.parallel_sessions,
             headless=self.config.headless,
             max_retries=self.config.max_retries,
+            event_bus=event_bus,
+            metrics_collector=metrics_collector,
         )
 
     async def __aenter__(self) -> "WebAgent":

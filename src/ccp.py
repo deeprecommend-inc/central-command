@@ -219,7 +219,12 @@ class CCPOrchestrator:
     async def __aenter__(self) -> "CCPOrchestrator":
         """Async context manager entry"""
         if self._web_agent is None:
-            self._web_agent = WebAgent(self._config)
+            # Create WebAgent with Sense layer integration
+            self._web_agent = WebAgent(
+                self._config,
+                event_bus=self.sense.event_bus,
+                metrics_collector=self.sense.metrics,
+            )
             await self._web_agent.__aenter__()
         return self
 
