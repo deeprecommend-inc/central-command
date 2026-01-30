@@ -6,12 +6,31 @@ from typing import Optional, Any
 from dataclasses import dataclass
 from loguru import logger
 
+import subprocess
 from browser_use import Agent
 from browser_use.browser.profile import BrowserProfile, ProxySettings
 from browser_use.llm import ChatOpenAI
 
 from .proxy_manager import ProxyManager, ProxyType
 from .ua_manager import UserAgentManager
+
+
+def get_playwright_chromium_path() -> str:
+    """Get Playwright's chromium executable path"""
+    try:
+        result = subprocess.run(
+            ["python", "-c",
+             "from playwright.sync_api import sync_playwright; "
+             "p = sync_playwright().start(); "
+             "print(p.chromium.executable_path); "
+             "p.stop()"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "/root/.cache/ms-playwright/chromium-1200/chrome-linux64/chrome"
 
 
 @dataclass
@@ -97,12 +116,13 @@ class BrowserUseAgent:
         profile = self.ua_manager.get_random_profile(session_id=session_id)
         logger.info(f"Using UA: {profile.user_agent[:60]}...")
 
-        # Create browser profile
+        # Create browser profile with explicit chromium path
         browser_profile = BrowserProfile(
             headless=self.config.headless,
             proxy=proxy_settings,
             user_agent=profile.user_agent,
             viewport={"width": profile.viewport_width, "height": profile.viewport_height},
+            executable_path=get_playwright_chromium_path(),
         )
 
         return browser_profile
