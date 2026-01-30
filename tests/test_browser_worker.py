@@ -217,3 +217,81 @@ class TestBrowserWorker:
         )
         assert result.success is False
         assert result.error_type == ErrorType.VALIDATION
+
+    def test_scroll_invalid_direction(self):
+        worker = BrowserWorker(worker_id="test")
+        worker._page = object()  # Mock page existence
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.scroll(direction="invalid")
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION
+
+    def test_hover_empty_selector(self):
+        worker = BrowserWorker(worker_id="test")
+        worker._page = object()  # Mock page existence
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.hover("")
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION
+
+    def test_select_empty_selector(self):
+        worker = BrowserWorker(worker_id="test")
+        worker._page = object()  # Mock page existence
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.select("", "value")
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION
+
+    def test_get_text_empty_selector(self):
+        worker = BrowserWorker(worker_id="test")
+        worker._page = object()  # Mock page existence
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.get_text("")
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION
+
+    def test_type_empty_selector(self):
+        worker = BrowserWorker(worker_id="test")
+        worker._page = object()  # Mock page existence
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.type("", "text")
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION
+
+    def test_press_empty_key(self):
+        worker = BrowserWorker(worker_id="test")
+        worker._page = object()  # Mock page existence
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.press("")
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION
+
+    def test_scroll_without_start(self):
+        worker = BrowserWorker(worker_id="test")
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.scroll()
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION
+
+    def test_wait_for_navigation_without_start(self):
+        worker = BrowserWorker(worker_id="test")
+        import asyncio
+        result = asyncio.get_event_loop().run_until_complete(
+            worker.wait_for_navigation()
+        )
+        assert result.success is False
+        assert result.error_type == ErrorType.VALIDATION

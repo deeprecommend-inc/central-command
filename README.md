@@ -166,22 +166,13 @@ from src import WebAgent
 from src.web_agent import AgentConfig
 
 async def main():
-    # プロキシなしで動作
     config = AgentConfig(
         parallel_sessions=5,
         headless=True,
     )
 
-    # モバイルIPを使用する場合
-    # config = AgentConfig(
-    #     brightdata_username="your_username",
-    #     brightdata_password="your_password",
-    #     proxy_type="mobile",
-    # )
-
-    agent = WebAgent(config)
-
-    try:
+    # コンテキストマネージャーで自動クリーンアップ
+    async with WebAgent(config) as agent:
         result = await agent.navigate("https://httpbin.org/ip")
         if result.success:
             print(f"Title: {result.data.get('title')}")
@@ -191,10 +182,27 @@ async def main():
             "https://httpbin.org/ip",
             "https://httpbin.org/user-agent",
         ])
-    finally:
-        await agent.cleanup()
 
 asyncio.run(main())
+```
+
+### プロキシ使用時
+
+```python
+async def main():
+    config = AgentConfig(
+        brightdata_username="your_username",
+        brightdata_password="your_password",
+        proxy_type="mobile",  # residential/mobile/datacenter/isp
+    )
+
+    async with WebAgent(config) as agent:
+        # プロキシヘルスチェック
+        health = await agent.health_check()
+        print(f"Proxy health: {health}")
+
+        result = await agent.navigate("https://httpbin.org/ip")
+        print(f"IP: {result.data}")
 ```
 
 ### AI駆動ブラウザ操作（Pythonコード）
@@ -259,8 +267,16 @@ asyncio.run(main())
 | `get_content()` | ページコンテンツを取得 |
 | `click(selector)` | 要素をクリック |
 | `fill(selector, value)` | 入力フィールドに値を設定 |
+| `type(selector, text)` | テキストを1文字ずつ入力 |
 | `screenshot(path)` | スクリーンショットを保存 |
 | `evaluate(script)` | JavaScriptを実行 |
+| `scroll(direction, amount)` | ページをスクロール |
+| `hover(selector)` | 要素にホバー |
+| `select(selector, value)` | ドロップダウンから選択 |
+| `get_text(selector)` | 要素のテキストを取得 |
+| `wait_for_selector(selector)` | 要素の出現を待機 |
+| `wait_for_navigation()` | ナビゲーション完了を待機 |
+| `press(key)` | キーボードキーを押下 |
 
 ### ParallelController
 

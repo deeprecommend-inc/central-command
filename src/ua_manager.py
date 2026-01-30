@@ -2,6 +2,7 @@
 User Agent Manager - Manages browser fingerprints and user agents
 """
 import random
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 from fake_useragent import UserAgent
@@ -29,8 +30,53 @@ class BrowserProfile:
         }
 
 
+class LRUCache:
+    """Simple LRU cache implementation using OrderedDict"""
+
+    def __init__(self, max_size: int = 100):
+        self._cache: OrderedDict = OrderedDict()
+        self._max_size = max_size
+
+    def get(self, key: str) -> Optional[any]:
+        """Get item and move to end (most recently used)"""
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        return None
+
+    def set(self, key: str, value: any) -> None:
+        """Set item, evicting oldest if at capacity"""
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        else:
+            if len(self._cache) >= self._max_size:
+                oldest = next(iter(self._cache))
+                del self._cache[oldest]
+                logger.debug(f"LRU evicted: {oldest}")
+        self._cache[key] = value
+
+    def delete(self, key: str) -> bool:
+        """Delete item if exists"""
+        if key in self._cache:
+            del self._cache[key]
+            return True
+        return False
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._cache
+
+    def __len__(self) -> int:
+        return len(self._cache)
+
+    def clear(self) -> None:
+        """Clear all cached items"""
+        self._cache.clear()
+
+
 class UserAgentManager:
-    """Manages user agents and browser profiles"""
+    """Manages user agents and browser profiles with LRU caching"""
+
+    MAX_CACHED_PROFILES = 100
 
     VIEWPORTS = [
         (1920, 1080),
@@ -52,15 +98,17 @@ class UserAgentManager:
         "Australia/Sydney",
     ]
 
-    def __init__(self):
+    def __init__(self, max_cached_profiles: int = MAX_CACHED_PROFILES):
         self._ua = UserAgent()
-        self._profiles: dict[str, BrowserProfile] = {}
+        self._profiles = LRUCache(max_size=max_cached_profiles)
 
     def get_random_profile(self, session_id: Optional[str] = None) -> BrowserProfile:
         """Generate a random but consistent browser profile"""
         # If session_id provided and profile exists, return cached
-        if session_id and session_id in self._profiles:
-            return self._profiles[session_id]
+        if session_id:
+            cached = self._profiles.get(session_id)
+            if cached:
+                return cached
 
         # Generate new profile
         ua_string = self._ua.random
@@ -86,15 +134,17 @@ class UserAgentManager:
 
         # Cache if session_id provided
         if session_id:
-            self._profiles[session_id] = profile
+            self._profiles.set(session_id, profile)
             logger.debug(f"Created browser profile for session {session_id}")
 
         return profile
 
     def get_chrome_profile(self, session_id: Optional[str] = None) -> BrowserProfile:
         """Get a Chrome-specific profile"""
-        if session_id and session_id in self._profiles:
-            return self._profiles[session_id]
+        if session_id:
+            cached = self._profiles.get(session_id)
+            if cached:
+                return cached
 
         ua_string = self._ua.chrome
         viewport = random.choice(self.VIEWPORTS)
@@ -111,12 +161,23 @@ class UserAgentManager:
         )
 
         if session_id:
-            self._profiles[session_id] = profile
+            self._profiles.set(session_id, profile)
 
         return profile
 
     def clear_session(self, session_id: str) -> None:
         """Clear cached profile for session"""
-        if session_id in self._profiles:
-            del self._profiles[session_id]
+        if self._profiles.delete(session_id):
             logger.debug(f"Cleared profile for session {session_id}")
+
+    def clear_all(self) -> None:
+        """Clear all cached profiles"""
+        self._profiles.clear()
+        logger.debug("Cleared all cached profiles")
+
+    def get_cache_stats(self) -> dict:
+        """Get cache statistics"""
+        return {
+            "cached_profiles": len(self._profiles),
+            "max_profiles": self._profiles._max_size,
+        }

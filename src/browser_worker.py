@@ -359,6 +359,167 @@ class BrowserWorker:
             error_type, error_msg = _classify_error(e)
             return WorkerResult(success=False, error=error_msg, error_type=error_type)
 
+    async def scroll(self, direction: str = "down", amount: int = 500) -> WorkerResult:
+        """Scroll the page"""
+        if not self._page:
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if direction not in ("up", "down", "left", "right"):
+            return WorkerResult(success=False, error="Invalid direction. Use: up, down, left, right", error_type=ErrorType.VALIDATION)
+
+        try:
+            if direction == "down":
+                await self._page.evaluate(f"window.scrollBy(0, {amount})")
+            elif direction == "up":
+                await self._page.evaluate(f"window.scrollBy(0, -{amount})")
+            elif direction == "right":
+                await self._page.evaluate(f"window.scrollBy({amount}, 0)")
+            elif direction == "left":
+                await self._page.evaluate(f"window.scrollBy(-{amount}, 0)")
+            return WorkerResult(success=True, data={"direction": direction, "amount": amount})
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Scroll timeout: {e}", error_type=ErrorType.TIMEOUT)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def hover(self, selector: str, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Hover over element"""
+        if not self._page:
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not selector:
+            return WorkerResult(success=False, error="Selector cannot be empty", error_type=ErrorType.VALIDATION)
+
+        try:
+            await self._page.hover(selector, timeout=timeout)
+            return WorkerResult(success=True)
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Hover timeout - element not found: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def select(self, selector: str, value: str, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Select option from dropdown"""
+        if not self._page:
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not selector:
+            return WorkerResult(success=False, error="Selector cannot be empty", error_type=ErrorType.VALIDATION)
+
+        try:
+            await self._page.select_option(selector, value, timeout=timeout)
+            return WorkerResult(success=True, data={"selected": value})
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Select timeout - element not found: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def get_text(self, selector: str, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Get text content of element"""
+        if not self._page:
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not selector:
+            return WorkerResult(success=False, error="Selector cannot be empty", error_type=ErrorType.VALIDATION)
+
+        try:
+            element = await self._page.wait_for_selector(selector, timeout=timeout)
+            if element:
+                text = await element.text_content()
+                return WorkerResult(success=True, data={"text": text})
+            return WorkerResult(success=False, error=f"Element not found: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Get text timeout - element not found: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def wait_for_navigation(self, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Wait for navigation to complete"""
+        if not self._page:
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        try:
+            await self._page.wait_for_load_state("domcontentloaded", timeout=timeout)
+            return WorkerResult(success=True, data={"url": self._page.url})
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Navigation timeout: {e}", error_type=ErrorType.TIMEOUT)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def type(self, selector: str, text: str, delay: int = 50, timeout: int = DEFAULT_TIMEOUT) -> WorkerResult:
+        """Type text into element with delay between keystrokes"""
+        if not self._page:
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not selector:
+            return WorkerResult(success=False, error="Selector cannot be empty", error_type=ErrorType.VALIDATION)
+
+        try:
+            await self._page.type(selector, text, delay=delay, timeout=timeout)
+            return WorkerResult(success=True)
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Type timeout - element not found: {selector}", error_type=ErrorType.ELEMENT_NOT_FOUND)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
+    async def press(self, key: str) -> WorkerResult:
+        """Press a keyboard key"""
+        if not self._page:
+            return WorkerResult(success=False, error="Browser not started", error_type=ErrorType.VALIDATION)
+
+        if not key:
+            return WorkerResult(success=False, error="Key cannot be empty", error_type=ErrorType.VALIDATION)
+
+        try:
+            await self._page.keyboard.press(key)
+            return WorkerResult(success=True, data={"key": key})
+
+        except PlaywrightTimeout as e:
+            return WorkerResult(success=False, error=f"Key press timeout: {e}", error_type=ErrorType.TIMEOUT)
+
+        except TargetClosedError as e:
+            return WorkerResult(success=False, error=f"Browser closed: {e}", error_type=ErrorType.BROWSER_CLOSED)
+
+        except Exception as e:
+            error_type, error_msg = _classify_error(e)
+            return WorkerResult(success=False, error=error_msg, error_type=error_type)
+
     @property
     def page(self) -> Optional[Page]:
         """Access underlying page object"""

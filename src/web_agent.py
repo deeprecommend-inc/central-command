@@ -20,24 +20,34 @@ class AgentConfig:
     brightdata_password: str = ""
     brightdata_host: str = "brd.superproxy.io"
     brightdata_port: int = 22225
-    # Proxy type: residential (住宅IP), datacenter, mobile, isp
+    # Proxy type: residential, datacenter, mobile, isp
     proxy_type: str = "residential"
     parallel_sessions: int = 5
     headless: bool = True
+    max_retries: int = 3
 
 
 class WebAgent:
     """
     Web automation agent with proxy rotation and user agent management.
 
-    Example usage:
+    Supports async context manager for automatic cleanup:
+
+        async with WebAgent(config) as agent:
+            result = await agent.navigate("https://example.com")
+
+    Or manual cleanup:
+
         agent = WebAgent(config)
-        result = await agent.navigate("https://example.com")
-        results = await agent.parallel_navigate(["https://a.com", "https://b.com"])
+        try:
+            result = await agent.navigate("https://example.com")
+        finally:
+            await agent.cleanup()
     """
 
     def __init__(self, config: Optional[AgentConfig] = None):
         self.config = config or AgentConfig()
+        self._closed = False
 
         # Initialize proxy manager if credentials provided
         self.proxy_manager = None
@@ -60,7 +70,7 @@ class WebAgent:
                 port=self.config.brightdata_port,
                 proxy_type=proxy_type,
             )
-            proxy_label = f"{proxy_type.value} (住宅IP)" if proxy_type == ProxyType.RESIDENTIAL else proxy_type.value
+            proxy_label = f"{proxy_type.value}" if proxy_type != ProxyType.RESIDENTIAL else f"{proxy_type.value} (default)"
             logger.info(f"Proxy enabled: type={proxy_label}")
         else:
             logger.info("Proxy disabled: BRIGHTDATA credentials not set (direct connection)")
@@ -71,10 +81,21 @@ class WebAgent:
             ua_manager=self.ua_manager,
             max_workers=self.config.parallel_sessions,
             headless=self.config.headless,
+            max_retries=self.config.max_retries,
         )
+
+    async def __aenter__(self) -> "WebAgent":
+        """Async context manager entry"""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit with cleanup"""
+        await self.cleanup()
+        return None
 
     async def navigate(self, url: str) -> TaskResult:
         """Navigate to URL with single worker"""
+        self._check_closed()
 
         async def task(worker: BrowserWorker) -> WorkerResult:
             result = await worker.navigate(url)
@@ -88,6 +109,7 @@ class WebAgent:
 
     async def parallel_navigate(self, urls: list[str]) -> list[TaskResult]:
         """Navigate to multiple URLs in parallel"""
+        self._check_closed()
 
         def make_task(url: str):
             async def task(worker: BrowserWorker) -> WorkerResult:
@@ -109,6 +131,7 @@ class WebAgent:
         task_fn,
     ) -> TaskResult:
         """Run custom task with worker"""
+        self._check_closed()
         return await self.controller.run_task(task_id, task_fn)
 
     async def run_custom_tasks_parallel(
@@ -116,11 +139,26 @@ class WebAgent:
         tasks: list[tuple[str, Any]],
     ) -> list[TaskResult]:
         """Run multiple custom tasks in parallel"""
+        self._check_closed()
         return await self.controller.run_parallel(tasks)
 
     async def cleanup(self) -> None:
         """Clean up all resources"""
-        await self.controller.cleanup_all()
+        if not self._closed:
+            await self.controller.cleanup_all()
+            self.ua_manager.clear_all()
+            self._closed = True
+            logger.info("WebAgent cleanup complete")
+
+    def _check_closed(self) -> None:
+        """Check if agent is closed"""
+        if self._closed:
+            raise RuntimeError("WebAgent is closed")
+
+    @property
+    def is_closed(self) -> bool:
+        """Check if agent has been closed"""
+        return self._closed
 
     def get_proxy_stats(self) -> dict:
         """Get proxy usage statistics"""
@@ -129,6 +167,18 @@ class WebAgent:
                 k: {"success_rate": v.success_rate, "total": v.total_requests}
                 for k, v in self.proxy_manager.get_stats().items()
             }
+        return {}
+
+    def get_proxy_health(self) -> dict:
+        """Get proxy health summary"""
+        if self.proxy_manager:
+            return self.proxy_manager.get_health_summary()
+        return {}
+
+    async def health_check(self) -> dict:
+        """Run health check on all proxies"""
+        if self.proxy_manager:
+            return await self.proxy_manager.health_check_all()
         return {}
 
 

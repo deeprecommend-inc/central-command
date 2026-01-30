@@ -2,7 +2,69 @@
 Tests for UserAgentManager
 """
 import pytest
-from src.ua_manager import UserAgentManager, BrowserProfile
+from src.ua_manager import UserAgentManager, BrowserProfile, LRUCache
+
+
+class TestLRUCache:
+    """Tests for LRUCache"""
+
+    def test_basic_set_get(self):
+        cache = LRUCache(max_size=3)
+        cache.set("a", 1)
+        assert cache.get("a") == 1
+
+    def test_get_nonexistent(self):
+        cache = LRUCache(max_size=3)
+        assert cache.get("nonexistent") is None
+
+    def test_eviction_on_capacity(self):
+        cache = LRUCache(max_size=3)
+        cache.set("a", 1)
+        cache.set("b", 2)
+        cache.set("c", 3)
+        cache.set("d", 4)  # Should evict "a"
+        assert cache.get("a") is None
+        assert cache.get("b") == 2
+        assert cache.get("d") == 4
+
+    def test_lru_order_on_get(self):
+        cache = LRUCache(max_size=3)
+        cache.set("a", 1)
+        cache.set("b", 2)
+        cache.set("c", 3)
+        cache.get("a")  # Move "a" to end
+        cache.set("d", 4)  # Should evict "b" (oldest after "a" was accessed)
+        assert cache.get("a") == 1
+        assert cache.get("b") is None
+
+    def test_delete(self):
+        cache = LRUCache(max_size=3)
+        cache.set("a", 1)
+        assert cache.delete("a") is True
+        assert cache.get("a") is None
+        assert cache.delete("nonexistent") is False
+
+    def test_contains(self):
+        cache = LRUCache(max_size=3)
+        cache.set("a", 1)
+        assert "a" in cache
+        assert "b" not in cache
+
+    def test_len(self):
+        cache = LRUCache(max_size=3)
+        assert len(cache) == 0
+        cache.set("a", 1)
+        assert len(cache) == 1
+        cache.set("b", 2)
+        assert len(cache) == 2
+
+    def test_clear(self):
+        cache = LRUCache(max_size=3)
+        cache.set("a", 1)
+        cache.set("b", 2)
+        cache.clear()
+        assert len(cache) == 0
+        assert cache.get("a") is None
 
 
 class TestBrowserProfile:
@@ -95,3 +157,27 @@ class TestUserAgentManager:
             assert "Mac" in profile.platform or "darwin" in profile.platform.lower()
         elif "linux" in ua_lower:
             assert "Linux" in profile.platform or "linux" in profile.platform.lower()
+
+    def test_lru_eviction(self):
+        manager = UserAgentManager(max_cached_profiles=3)
+        manager.get_random_profile(session_id="s1")
+        manager.get_random_profile(session_id="s2")
+        manager.get_random_profile(session_id="s3")
+        manager.get_random_profile(session_id="s4")  # Should evict s1
+        stats = manager.get_cache_stats()
+        assert stats["cached_profiles"] == 3
+        assert stats["max_profiles"] == 3
+
+    def test_clear_all(self):
+        manager = UserAgentManager()
+        manager.get_random_profile(session_id="s1")
+        manager.get_random_profile(session_id="s2")
+        manager.clear_all()
+        stats = manager.get_cache_stats()
+        assert stats["cached_profiles"] == 0
+
+    def test_get_cache_stats(self):
+        manager = UserAgentManager(max_cached_profiles=50)
+        stats = manager.get_cache_stats()
+        assert stats["max_profiles"] == 50
+        assert stats["cached_profiles"] == 0
