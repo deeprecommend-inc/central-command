@@ -24,7 +24,31 @@ def get_env(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
-async def run_basic_agent(urls: list[str]):
+def parse_proxy_type(args: list[str]) -> tuple[str, list[str]]:
+    """Parse proxy type from arguments"""
+    proxy_type = get_env("BRIGHTDATA_PROXY_TYPE", "residential")
+    remaining_args = []
+
+    for arg in args:
+        if arg in ["--residential", "-r"]:
+            proxy_type = "residential"
+        elif arg in ["--mobile", "-m"]:
+            proxy_type = "mobile"
+        elif arg in ["--datacenter", "-d"]:
+            proxy_type = "datacenter"
+        elif arg in ["--isp", "-i"]:
+            proxy_type = "isp"
+        elif arg == "--no-proxy":
+            # Force no proxy
+            os.environ["BRIGHTDATA_USERNAME"] = ""
+            os.environ["BRIGHTDATA_PASSWORD"] = ""
+        else:
+            remaining_args.append(arg)
+
+    return proxy_type, remaining_args
+
+
+async def run_basic_agent(urls: list[str], proxy_type: str = "residential"):
     """Run basic Playwright agent without AI"""
     from src import WebAgent
     from src.web_agent import AgentConfig
@@ -34,7 +58,7 @@ async def run_basic_agent(urls: list[str]):
         brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
         brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
         brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
-        proxy_type=get_env("BRIGHTDATA_PROXY_TYPE", "residential"),
+        proxy_type=proxy_type,
         parallel_sessions=int(get_env("PARALLEL_SESSIONS", "5")),
         headless=get_env("HEADLESS", "true").lower() == "true",
     )
@@ -68,78 +92,19 @@ async def run_basic_agent(urls: list[str]):
         await agent.cleanup()
 
 
-async def run_ai_agent(task: str):
+async def run_ai_agent(task: str, proxy_type: str = "residential"):
     """Run AI-driven browser-use agent"""
     logger.warning("AI agent (browser-use) is currently not supported in WSL environment")
     logger.info("Use 'python run.py url <URL>' for basic web operations")
     logger.info("browser-use requires native Linux/Mac environment")
     sys.exit(1)
 
-    # Disabled due to WSL compatibility issues
-    from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
 
-    openai_key = get_env("OPENAI_API_KEY")
-    if not openai_key:
-        logger.error("OPENAI_API_KEY is required for AI agent")
-        logger.info("Set OPENAI_API_KEY in .env or environment")
-        sys.exit(1)
-
-    config = BrowserUseConfig(
-        brightdata_username=get_env("BRIGHTDATA_USERNAME"),
-        brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
-        brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
-        brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
-        proxy_type=get_env("BRIGHTDATA_PROXY_TYPE", "residential"),
-        openai_api_key=openai_key,
-        model=get_env("OPENAI_MODEL", "gpt-4o"),
-        headless=get_env("HEADLESS", "true").lower() == "true",
-    )
-
-    agent = BrowserUseAgent(config)
-
-    logger.info(f"Running AI task: {task}")
-    result = await agent.run(task)
-
-    if result["success"]:
-        logger.info("Task completed successfully")
-        logger.info(f"Result: {result.get('result')}")
-    else:
-        logger.error(f"Task failed: {result.get('error')}")
-
-
-async def run_parallel_ai(tasks: list[str]):
+async def run_parallel_ai(tasks: list[str], proxy_type: str = "residential"):
     """Run multiple AI tasks in parallel"""
     logger.warning("AI agent (browser-use) is currently not supported in WSL environment")
     logger.info("Use 'python run.py url <URL1> <URL2>' for parallel web operations")
     sys.exit(1)
-
-    # Disabled due to WSL compatibility issues
-    from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
-
-    openai_key = get_env("OPENAI_API_KEY")
-    if not openai_key:
-        logger.error("OPENAI_API_KEY is required for AI agent")
-        sys.exit(1)
-
-    config = BrowserUseConfig(
-        brightdata_username=get_env("BRIGHTDATA_USERNAME"),
-        brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
-        proxy_type=get_env("BRIGHTDATA_PROXY_TYPE", "residential"),
-        openai_api_key=openai_key,
-        headless=get_env("HEADLESS", "true").lower() == "true",
-    )
-
-    agent = BrowserUseAgent(config)
-
-    max_concurrent = int(get_env("PARALLEL_SESSIONS", "5"))
-    results = await agent.run_parallel(tasks, max_concurrent=max_concurrent)
-
-    for result in results:
-        idx = result.get("index", "?")
-        if result["success"]:
-            logger.info(f"[{idx}] Success")
-        else:
-            logger.error(f"[{idx}] Failed: {result.get('error')}")
 
 
 def print_usage():
@@ -147,26 +112,33 @@ def print_usage():
 Web Agent CLI
 
 Usage:
-  python run.py <command> [args...]
+  python run.py <command> [options] [args...]
 
 Commands:
   url <url> [url2...]     Navigate to URL(s) with proxy/UA rotation
-  ai <task>               Run AI-driven task with natural language
-  parallel <task1> <task2>...  Run multiple AI tasks in parallel
+  ai <task>               Run AI-driven task (not supported in WSL)
   demo                    Run demo with test URLs
   test                    Test basic functionality
 
+Proxy Options:
+  --residential, -r       Use residential IP (default)
+  --mobile, -m            Use mobile IP
+  --datacenter, -d        Use datacenter IP
+  --isp, -i               Use ISP IP
+  --no-proxy              Disable proxy (direct connection)
+
 Examples:
   python run.py url https://httpbin.org/ip
-  python run.py url https://example.com https://google.com
-  python run.py ai "Go to google.com and search for python"
-  python run.py demo
+  python run.py url --mobile https://example.com
+  python run.py url -r https://google.com https://github.com
+  python run.py url --no-proxy https://example.com
+  python run.py demo --mobile
+  python run.py demo --no-proxy
 
 Environment Variables:
   BRIGHTDATA_USERNAME     BrightData proxy username (optional)
   BRIGHTDATA_PASSWORD     BrightData proxy password (optional)
   BRIGHTDATA_PROXY_TYPE   residential (default), datacenter, mobile, isp
-  OPENAI_API_KEY          OpenAI API key (required for 'ai' command only)
   PARALLEL_SESSIONS       Max parallel sessions (default: 5)
   HEADLESS                Run headless (default: true)
 
@@ -174,19 +146,19 @@ Note: BRIGHTDATA settings are optional. Without them, the agent runs with direct
 """)
 
 
-async def run_demo():
+async def run_demo(proxy_type: str = "residential"):
     """Run demo"""
     urls = [
         "https://httpbin.org/ip",
         "https://httpbin.org/user-agent",
         "https://httpbin.org/headers",
     ]
-    await run_basic_agent(urls)
+    await run_basic_agent(urls, proxy_type)
 
 
-async def run_test():
+async def run_test(proxy_type: str = "residential"):
     """Quick test"""
-    await run_basic_agent(["https://httpbin.org/ip"])
+    await run_basic_agent(["https://httpbin.org/ip"], proxy_type)
 
 
 def main():
@@ -196,32 +168,33 @@ def main():
 
     command = sys.argv[1].lower()
 
+    # Parse proxy type from remaining arguments
+    proxy_type, args = parse_proxy_type(sys.argv[2:])
+
     if command == "url":
-        if len(sys.argv) < 3:
+        if len(args) < 1:
             print("Error: URL required")
             sys.exit(1)
-        urls = sys.argv[2:]
-        asyncio.run(run_basic_agent(urls))
+        asyncio.run(run_basic_agent(args, proxy_type))
 
     elif command == "ai":
-        if len(sys.argv) < 3:
+        if len(args) < 1:
             print("Error: Task description required")
             sys.exit(1)
-        task = " ".join(sys.argv[2:])
-        asyncio.run(run_ai_agent(task))
+        task = " ".join(args)
+        asyncio.run(run_ai_agent(task, proxy_type))
 
     elif command == "parallel":
-        if len(sys.argv) < 3:
+        if len(args) < 1:
             print("Error: Tasks required")
             sys.exit(1)
-        tasks = sys.argv[2:]
-        asyncio.run(run_parallel_ai(tasks))
+        asyncio.run(run_parallel_ai(args, proxy_type))
 
     elif command == "demo":
-        asyncio.run(run_demo())
+        asyncio.run(run_demo(proxy_type))
 
     elif command == "test":
-        asyncio.run(run_test())
+        asyncio.run(run_test(proxy_type))
 
     elif command in ["-h", "--help", "help"]:
         print_usage()
