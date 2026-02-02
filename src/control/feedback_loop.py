@@ -251,7 +251,11 @@ class FeedbackLoop:
     def get_summary(self) -> dict:
         """Get feedback summary"""
         if not self._feedback_history:
-            return {"status": "no_data", "samples": 0}
+            return {
+                "status": "no_data",
+                "samples": 0,
+                "current_params": self._current_params,
+            }
 
         success_fb = [fb for fb in self._feedback_history if fb.metric_type == "success"]
         duration_fb = [fb for fb in self._feedback_history if fb.metric_type == "response_time"]

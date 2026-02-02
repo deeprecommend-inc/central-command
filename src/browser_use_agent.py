@@ -2,6 +2,7 @@
 Browser-Use Agent - AI-driven browser automation with proxy and UA rotation
 """
 import asyncio
+import sys
 from typing import Optional, Any
 from dataclasses import dataclass
 from loguru import logger
@@ -15,11 +16,11 @@ from .proxy_manager import ProxyManager, ProxyType
 from .ua_manager import UserAgentManager
 
 
-def get_playwright_chromium_path() -> str:
-    """Get Playwright's chromium executable path"""
+def get_playwright_chromium_path() -> Optional[str]:
+    """Get Playwright's chromium executable path (cross-platform)"""
     try:
         result = subprocess.run(
-            ["python", "-c",
+            [sys.executable, "-c",
              "from playwright.sync_api import sync_playwright; "
              "p = sync_playwright().start(); "
              "print(p.chromium.executable_path); "
@@ -27,10 +28,13 @@ def get_playwright_chromium_path() -> str:
             capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            path = result.stdout.strip()
+            if path:
+                return path
     except Exception:
         pass
-    return "/root/.cache/ms-playwright/chromium-1200/chrome-linux64/chrome"
+    # Return None to let Playwright auto-detect the path
+    return None
 
 
 @dataclass

@@ -3,6 +3,8 @@ Browser Worker - Single browser session with proxy and UA
 """
 import asyncio
 import os
+import tempfile
+from pathlib import Path
 from typing import Optional, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -88,24 +90,32 @@ def _validate_url(url: str) -> Optional[str]:
 
 
 def _validate_path(path: str) -> Optional[str]:
-    """Validate file path for security. Returns error message if invalid."""
+    """Validate file path for security (cross-platform). Returns error message if invalid."""
     if not path:
         return "Path cannot be empty"
 
     # Normalize path to detect traversal
-    normalized = os.path.normpath(path)
+    normalized = Path(path).resolve()
 
-    # Check for directory traversal
-    if ".." in normalized:
+    # Check for directory traversal (.. in original path)
+    if ".." in path:
         return "Path traversal not allowed"
 
-    # Check for absolute paths outside allowed directories
-    allowed_prefixes = ["/tmp/", "/var/tmp/", os.getcwd()]
-    if os.path.isabs(normalized):
-        if not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
-            return f"Path must be within allowed directories: {allowed_prefixes}"
+    # Define allowed directories (cross-platform)
+    allowed_dirs = [
+        Path(tempfile.gettempdir()).resolve(),  # System temp dir (Linux: /tmp, Windows: %TEMP%)
+        Path.cwd().resolve(),
+    ]
 
-    return None
+    # Check if path is within allowed directories
+    for allowed in allowed_dirs:
+        try:
+            normalized.relative_to(allowed)
+            return None  # Path is valid
+        except ValueError:
+            continue
+
+    return f"Path must be within allowed directories: {[str(d) for d in allowed_dirs]}"
 
 
 class BrowserWorker:
