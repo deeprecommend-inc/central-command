@@ -1,4 +1,4 @@
-# CCP - Central Command Platform
+# CCP - Central Command Post
 
 産業現場の「判断」と「指示」を担うAI中央指揮所
 
