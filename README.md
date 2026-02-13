@@ -381,7 +381,33 @@ python run.py url --json https://example.com
 python run.py url -v https://example.com
 ```
 
-### browser-use（AIブラウザ操作）
+### AI Agent（CAPTCHA対応ブラウザ操作）
+
+プロキシ/UA/CAPTCHA自動突破を統合したAIブラウザエージェント。
+
+```bash
+# AIタスク実行（CAPTCHA自動突破付き）
+python run.py ai "https://example.com にアクセスしてCAPTCHAを解く" --no-proxy
+
+# CAPTCHAソルバー指定
+python run.py ai --captcha-solver vision "サイトにログインする"
+python run.py ai --captcha-solver 2captcha "フォームを送信する"
+
+# プロキシ+AI
+python run.py ai -m "モバイルIPでサイトにアクセスする"
+```
+
+CAPTCHAソルバー:
+- `vision` - GPT-4o Vision（デフォルト）
+- `2captcha` - 2captchaサービス
+- `anti-captcha` - Anti-Captchaサービス
+
+環境変数:
+- `OPENAI_API_KEY` - 必須（AIエージェント + Vision CAPTCHA）
+- `TWOCAPTCHA_API_KEY` - 2captchaフォールバック用（オプション）
+- `ANTICAPTCHA_API_KEY` - Anti-Captchaフォールバック用（オプション）
+
+### browser-use（シンプル実行）
 
 プロキシ/UA設定なしでbrowser-useを直接実行する。
 
@@ -795,9 +821,9 @@ async with async_playwright() as p:
 人間らしい操作を模倣するマウス/キーボード/スクロール動作。
 
 ```python
-from src.command import BehaviorConfig, HumanBehavior
+from src.command import HumanBehaviorConfig, HumanBehavior
 
-config = BehaviorConfig(
+config = HumanBehaviorConfig(
     mouse_speed="normal",      # slow, normal, fast
     typing_speed="normal",
     typo_rate=0.02,            # タイポ率
@@ -824,24 +850,31 @@ await behavior.scroll.scroll_to_element(page, "#footer")
 
 ### CAPTCHA Solver（v5 Command層）
 
-CAPTCHA自動検出と解決サービス連携。
+CAPTCHA自動検出と解決サービス連携。Vision AI（GPT-4o）による画像CAPTCHA解析に対応。
 
 ```python
 from src.command import (
     CaptchaDetector,
     CaptchaMiddleware,
     TwoCaptchaSolver,
+    VisionCaptchaSolver,
     create_captcha_solver,
 )
 
-# ソルバー作成
-solver = create_captcha_solver(
+# Vision AIソルバー（GPT-4o画像認識）
+vision_solver = create_captcha_solver(
+    provider="vision",
+    api_key="your_openai_api_key",
+)
+
+# トークンベースソルバー
+token_solver = create_captcha_solver(
     provider="2captcha",  # or "anti-captcha"
     api_key="your_api_key",
 )
 
 # 残高確認
-balance = await solver.get_balance()
+balance = await token_solver.get_balance()
 print(f"Balance: ${balance}")
 
 # 手動検出と解決
@@ -850,13 +883,14 @@ captcha = await detector.detect(page)
 
 if captcha:
     print(f"Found: {captcha.captcha_type}")
-    solution = await solver.solve(captcha)
+    solution = await vision_solver.solve(captcha)
     if solution.success:
-        print(f"Token: {solution.token}")
+        print(f"Text: {solution.text}")
 
-# 自動ミドルウェア（検出と解決を自動化）
+# 自動ミドルウェア（フォールバックチェーン対応）
 middleware = CaptchaMiddleware(
-    solver=solver,
+    solver=vision_solver,
+    solvers=[vision_solver, token_solver],  # Vision -> 2captcha
     auto_solve=True,
     max_retries=3,
 )
@@ -866,6 +900,19 @@ await middleware.attach(context)
 # 以降、CAPTCHAが自動解決される
 await page.goto("https://protected-site.com")
 ```
+
+対応CAPTCHAタイプ:
+- reCAPTCHA v2/v3
+- hCaptcha
+- Cloudflare Turnstile
+- 画像CAPTCHA（Vision AI）
+- テキストCAPTCHA（Vision AI）
+- FunCaptcha
+
+ソルバー優先順位:
+1. Vision LLM (GPT-4o) - 画像/テキストCAPTCHA
+2. 2captcha - トークンベースフォールバック
+3. anti-captcha - トークンベースフォールバック
 
 ### Docker Compose
 
@@ -933,7 +980,8 @@ src/
 ├── command/                 # Command層
 │   ├── stealth.py           # v5 Stealth Browser
 │   ├── human_behavior.py    # v5 Human-like Behavior
-│   └── captcha_solver.py    # v5 CAPTCHA Solver
+│   ├── captcha_solver.py    # v5 CAPTCHA Solver
+│   └── vision_captcha_solver.py  # v6 Vision AI CAPTCHA Solver
 ├── control/                 # Control層
 │   ├── executor.py
 │   ├── state_machine.py

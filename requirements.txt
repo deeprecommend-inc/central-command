@@ -1,5 +1,5 @@
 # Core
-browser-use==0.9.7
+browser-use==0.11.8
 playwright>=1.40.0
 fake-useragent>=1.4.0
 aiohttp>=3.9.0

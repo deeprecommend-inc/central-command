@@ -538,17 +538,34 @@ class CaptchaDetector:
         ".cf-turnstile",
     ]
 
+    # Image CAPTCHA selectors
+    IMAGE_CAPTCHA_SELECTORS = [
+        "img[src*='captcha']",
+        ".captcha-image",
+        "[id*='captcha'] img",
+        "canvas.captcha",
+        "[data-captcha-image]",
+        "img[alt*='captcha' i]",
+        ".challenge-image",
+    ]
+
+    @staticmethod
+    async def _query_selector(page, selector: str):
+        """browser-use 0.11.8 compatible query_selector replacement"""
+        elements = await page.get_elements_by_css_selector(selector)
+        return elements[0] if elements else None
+
     async def detect(self, page) -> Optional[CaptchaInfo]:
         """
         Detect CAPTCHA on page.
 
         Args:
-            page: Playwright Page object
+            page: browser-use Page object (CDP-based)
 
         Returns:
             CaptchaInfo if CAPTCHA found, None otherwise
         """
-        page_url = page.url
+        page_url = await page.get_url()
 
         # Check reCAPTCHA v2
         captcha = await self._detect_recaptcha_v2(page, page_url)
@@ -570,13 +587,18 @@ class CaptchaDetector:
         if captcha:
             return captcha
 
+        # Check image CAPTCHA
+        captcha = await self._detect_image_captcha(page, page_url)
+        if captcha:
+            return captcha
+
         return None
 
     async def _detect_recaptcha_v2(self, page, page_url: str) -> Optional[CaptchaInfo]:
         """Detect reCAPTCHA v2"""
         for selector in self.RECAPTCHA_V2_SELECTORS:
             try:
-                element = await page.query_selector(selector)
+                element = await self._query_selector(page, selector)
                 if element:
                     site_key = await self._get_recaptcha_sitekey(page, element)
                     if site_key:
@@ -602,7 +624,7 @@ class CaptchaDetector:
     async def _detect_recaptcha_v3(self, page, page_url: str) -> Optional[CaptchaInfo]:
         """Detect reCAPTCHA v3"""
         try:
-            html = await page.content()
+            html = await page.evaluate("() => document.documentElement.outerHTML")
 
             for pattern in self.RECAPTCHA_V3_PATTERNS:
                 if re.search(pattern, html):
@@ -625,7 +647,7 @@ class CaptchaDetector:
         """Detect hCaptcha"""
         for selector in self.HCAPTCHA_SELECTORS:
             try:
-                element = await page.query_selector(selector)
+                element = await self._query_selector(page, selector)
                 if element:
                     site_key = await self._get_hcaptcha_sitekey(page, element)
                     if site_key:
@@ -643,7 +665,7 @@ class CaptchaDetector:
         """Detect Cloudflare Turnstile"""
         for selector in self.TURNSTILE_SELECTORS:
             try:
-                element = await page.query_selector(selector)
+                element = await self._query_selector(page, selector)
                 if element:
                     site_key = await page.evaluate("""
                         () => {
@@ -661,6 +683,54 @@ class CaptchaDetector:
                 continue
 
         return None
+
+    async def _detect_image_captcha(self, page, page_url: str) -> Optional[CaptchaInfo]:
+        """Detect image-based CAPTCHA"""
+        for selector in self.IMAGE_CAPTCHA_SELECTORS:
+            try:
+                element = await self._query_selector(page, selector)
+                if element:
+                    image_data = await self._capture_element_image(page, element)
+                    return CaptchaInfo(
+                        captcha_type=CaptchaType.IMAGE,
+                        page_url=page_url,
+                        image_data=image_data,
+                    )
+            except Exception:
+                continue
+
+        # Check for Cloudflare challenge page
+        try:
+            is_cf_challenge = await page.evaluate("""
+                () => {
+                    return document.title.includes('Just a moment') ||
+                           document.title.includes('Attention Required') ||
+                           !!document.querySelector('#challenge-running') ||
+                           !!document.querySelector('#challenge-stage');
+                }
+            """)
+            if is_cf_challenge:
+                return CaptchaInfo(
+                    captcha_type=CaptchaType.IMAGE,
+                    page_url=page_url,
+                    extra={"cloudflare_challenge": True},
+                )
+        except Exception:
+            pass
+
+        return None
+
+    async def _capture_element_image(self, page, element) -> Optional[bytes]:
+        """Capture screenshot of a specific element (returns bytes)"""
+        try:
+            # browser-use 0.11.8: screenshot() returns base64 str
+            return base64.b64decode(await element.screenshot())
+        except Exception:
+            try:
+                return base64.b64decode(await page.screenshot())
+            except Exception as e:
+                logger.error(f"Element screenshot failed: {e}")
+                return None
 
     async def _get_recaptcha_sitekey(self, page, element) -> Optional[str]:
         """Extract reCAPTCHA site key"""
@@ -725,12 +795,14 @@ class CaptchaMiddleware:
     def __init__(
         self,
         solver: CaptchaSolver,
+        solvers: Optional[list[CaptchaSolver]] = None,
         auto_solve: bool = True,
         max_retries: int = 3,
         on_captcha_detected: Optional[Callable[[CaptchaInfo], None]] = None,
         on_captcha_solved: Optional[Callable[[CaptchaSolution], None]] = None,
     ):
         self._solver = solver
+        self._solvers = solvers or [solver]
         self._detector = CaptchaDetector()
         self._auto_solve = auto_solve
         self._max_retries = max_retries
@@ -763,24 +835,32 @@ class CaptchaMiddleware:
             logger.error(f"CAPTCHA check error: {e}")
 
     async def _solve_and_submit(self, page, captcha: CaptchaInfo) -> bool:
-        """Solve CAPTCHA and submit token"""
+        """Solve CAPTCHA and submit token using solver chain"""
         for attempt in range(self._max_retries):
             logger.info(f"Solving CAPTCHA attempt {attempt + 1}/{self._max_retries}")
 
-            solution = await self._solver.solve(captcha)
+            # Try each solver in chain
+            for solver in self._solvers:
+                if not solver.supports(captcha.captcha_type):
+                    continue
 
-            if self._on_solved:
-                self._on_solved(solution)
+                logger.info(f"Trying solver: {solver.__class__.__name__}")
+                solution = await solver.solve(captcha)
 
-            if solution.success:
-                logger.info(f"CAPTCHA solved in {solution.solve_time_ms}ms")
+                if self._on_solved:
+                    self._on_solved(solution)
 
-                # Submit token
-                success = await self._submit_token(page, captcha, solution)
-                if success:
-                    return True
-            else:
-                logger.warning(f"CAPTCHA solve failed: {solution.error}")
+                if solution.success:
+                    logger.info(
+                        f"CAPTCHA solved by {solution.provider} in {solution.solve_time_ms}ms"
+                    )
+                    success = await self._submit_token(page, captcha, solution)
+                    if success:
+                        return True
+                else:
+                    logger.warning(
+                        f"Solver {solver.__class__.__name__} failed: {solution.error}"
+                    )
 
         return False
 
@@ -902,7 +982,7 @@ def create_captcha_solver(
     Factory function to create CAPTCHA solver.
 
     Args:
-        provider: "2captcha" or "anti-captcha"
+        provider: "2captcha", "anti-captcha", or "vision"
         api_key: API key for the service
         **kwargs: Provider-specific options
 
@@ -913,5 +993,8 @@ def create_captcha_solver(
         return TwoCaptchaSolver(api_key=api_key, **kwargs)
     elif provider in ("anti-captcha", "anticaptcha"):
         return AntiCaptchaSolver(api_key=api_key, **kwargs)
+    elif provider == "vision":
+        from .vision_captcha_solver import VisionCaptchaSolver
+        return VisionCaptchaSolver(api_key=api_key, **kwargs)
     else:
         raise ValueError(f"Unknown provider: {provider}")

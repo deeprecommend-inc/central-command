@@ -10,7 +10,7 @@ from .stealth import (
     TIMEZONES,
 )
 from .human_behavior import (
-    BehaviorConfig,
+    HumanBehaviorConfig,
     HumanMouse,
     HumanTyping,
     HumanScroll,
@@ -27,6 +27,7 @@ from .captcha_solver import (
     CaptchaMiddleware,
     create_captcha_solver,
 )
+from .vision_captcha_solver import VisionCaptchaSolver
 
 __all__ = [
     # Stealth
@@ -37,7 +38,7 @@ __all__ = [
     "PLATFORMS",
     "TIMEZONES",
     # Human Behavior
-    "BehaviorConfig",
+    "HumanBehaviorConfig",
     "HumanMouse",
     "HumanTyping",
     "HumanScroll",
@@ -52,4 +53,5 @@ __all__ = [
     "CaptchaDetector",
     "CaptchaMiddleware",
     "create_captcha_solver",
+    "VisionCaptchaSolver",
 ]

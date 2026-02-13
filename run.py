@@ -31,9 +31,12 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
     options = {
         "json": False,
         "verbose": False,
+        "captcha_solver": "vision",
     }
 
-    for arg in args:
+    i = 0
+    while i < len(args):
+        arg = args[i]
         if arg in ["--residential", "-r"]:
             proxy_type = "residential"
         elif arg in ["--mobile", "-m"]:
@@ -49,8 +52,12 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
             options["json"] = True
         elif arg in ["--verbose", "-v"]:
             options["verbose"] = True
+        elif arg == "--captcha-solver" and i + 1 < len(args):
+            i += 1
+            options["captcha_solver"] = args[i]
         else:
             remaining_args.append(arg)
+        i += 1
 
     return proxy_type, remaining_args, options
 
@@ -138,19 +145,72 @@ async def run_health_check(proxy_type: str = "residential"):
         print(f"Live check: {healthy}/{len(results)} healthy")
 
 
-async def run_ai_agent(task: str, proxy_type: str = "residential"):
-    """Run AI-driven browser-use agent"""
-    logger.warning("AI agent (browser-use) is currently not supported in WSL environment")
-    logger.info("Use 'python run.py url <URL>' for basic web operations")
-    logger.info("browser-use requires native Linux/Mac environment")
-    sys.exit(1)
+async def run_ai_agent(
+    task: str,
+    proxy_type: str = "residential",
+    captcha_solver: str = "vision",
+):
+    """Run AI-driven browser-use agent with CAPTCHA support"""
+    from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
+
+    openai_key = get_env("OPENAI_API_KEY")
+    if not openai_key:
+        logger.error("OPENAI_API_KEY is required for AI agent")
+        sys.exit(1)
+
+    config = BrowserUseConfig(
+        brightdata_username=get_env("BRIGHTDATA_USERNAME"),
+        brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
+        brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
+        brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
+        proxy_type=proxy_type,
+        openai_api_key=openai_key,
+        model=get_env("OPENAI_MODEL", "gpt-4o"),
+        headless=get_env("HEADLESS", "true").lower() == "true",
+        captcha_solver=captcha_solver,
+    )
+
+    agent = BrowserUseAgent(config)
+    result = await agent.run(task)
+
+    if result.get("success"):
+        logger.info(f"Task completed successfully")
+    else:
+        logger.error(f"Task failed: {result.get('error')}")
+        sys.exit(1)
 
 
-async def run_parallel_ai(tasks: list[str], proxy_type: str = "residential"):
-    """Run multiple AI tasks in parallel"""
-    logger.warning("AI agent (browser-use) is currently not supported in WSL environment")
-    logger.info("Use 'python run.py url <URL1> <URL2>' for parallel web operations")
-    sys.exit(1)
+async def run_parallel_ai(
+    tasks: list[str],
+    proxy_type: str = "residential",
+    captcha_solver: str = "vision",
+):
+    """Run multiple AI tasks in parallel with CAPTCHA support"""
+    from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
+
+    openai_key = get_env("OPENAI_API_KEY")
+    if not openai_key:
+        logger.error("OPENAI_API_KEY is required for AI agent")
+        sys.exit(1)
+
+    config = BrowserUseConfig(
+        brightdata_username=get_env("BRIGHTDATA_USERNAME"),
+        brightdata_password=get_env("BRIGHTDATA_PASSWORD"),
+        brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
+        brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
+        proxy_type=proxy_type,
+        openai_api_key=openai_key,
+        model=get_env("OPENAI_MODEL", "gpt-4o"),
+        headless=get_env("HEADLESS", "true").lower() == "true",
+        captcha_solver=captcha_solver,
+    )
+
+    agent = BrowserUseAgent(config)
+    max_sessions = int(get_env("PARALLEL_SESSIONS", "5"))
+    results = await agent.run_parallel(tasks, max_concurrent=max_sessions)
+
+    success_count = sum(1 for r in results if r.get("success"))
+    logger.info(f"Completed: {success_count}/{len(tasks)} tasks successful")
 
 
 def print_usage():
@@ -163,7 +223,7 @@ Usage:
 Commands:
   url <url> [url2...]     Navigate to URL(s) with proxy/UA rotation
   health                  Check proxy health status
-  ai <task>               Run AI-driven task (not supported in WSL)
+  ai <task>               Run AI-driven task with CAPTCHA support
   demo                    Run demo with test URLs
   test                    Test basic functionality
 
@@ -173,6 +233,9 @@ Proxy Options:
   --datacenter, -d        Use datacenter IP
   --isp, -i               Use ISP IP
   --no-proxy              Disable proxy (direct connection)
+
+CAPTCHA Options:
+  --captcha-solver <type> CAPTCHA solver: vision (default), 2captcha, anti-captcha
 
 Other Options:
   --json                  Output in JSON format
@@ -185,6 +248,8 @@ Examples:
   python run.py url --no-proxy https://example.com
   python run.py health --mobile
   python run.py demo --no-proxy
+  python run.py ai "Go to example.com and solve the CAPTCHA" --no-proxy
+  python run.py ai --captcha-solver 2captcha "Navigate to site and login"
 
 Environment Variables:
   BRIGHTDATA_USERNAME     BrightData proxy username (optional)
@@ -194,6 +259,10 @@ Environment Variables:
   HEADLESS                Run headless (default: true)
   LOG_FORMAT              Logging format: json or text (default: text)
   LOG_LEVEL               Log level: DEBUG, INFO, WARNING, ERROR (default: INFO)
+  OPENAI_API_KEY          OpenAI API key (required for ai command, Vision CAPTCHA)
+  OPENAI_MODEL            OpenAI model (default: gpt-4o)
+  TWOCAPTCHA_API_KEY      2captcha API key (optional fallback)
+  ANTICAPTCHA_API_KEY     Anti-Captcha API key (optional fallback)
 
 Note: BRIGHTDATA settings are optional. Without them, the agent runs with direct connection.
 """)
@@ -244,13 +313,13 @@ def main():
             print("Error: Task description required")
             sys.exit(1)
         task = " ".join(args)
-        asyncio.run(run_ai_agent(task, proxy_type))
+        asyncio.run(run_ai_agent(task, proxy_type, options["captcha_solver"]))
 
     elif command == "parallel":
         if len(args) < 1:
             print("Error: Tasks required")
             sys.exit(1)
-        asyncio.run(run_parallel_ai(args, proxy_type))
+        asyncio.run(run_parallel_ai(args, proxy_type, options["captcha_solver"]))
 
     elif command == "demo":
         asyncio.run(run_demo(proxy_type))
