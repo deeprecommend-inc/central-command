@@ -56,10 +56,22 @@ from .protocols import (
     EvaluationResult,
 )
 
+# Channel Distribution
+from .command.channels import (
+    Channel, ChannelMeta, ChannelStatus, DeliveryResult,
+    ChannelRegistry, SlackChannel, TeamsChannel, EmailChannel, WebhookChannel,
+)
+
+# Hook System
+from .hooks import HookRunner, HookRegistration
+
+# Config Reload
+from .config_reload import ConfigReloader, ReloadPlan
+
 # CCP Orchestrator
 from .ccp import (
     CCPOrchestrator,
-    SenseLayer, ThinkLayer, ControlLayer, LearnLayer,
+    SenseLayer, ThinkLayer, CommandLayer, ControlLayer, LearnLayer,
     CycleResult,
 )
 
@@ -137,10 +149,27 @@ __all__ = [
     "PolicyDecision",
     "PolicyContext",
     "EvaluationResult",
+    # Channel Distribution
+    "Channel",
+    "ChannelMeta",
+    "ChannelStatus",
+    "DeliveryResult",
+    "ChannelRegistry",
+    "SlackChannel",
+    "TeamsChannel",
+    "EmailChannel",
+    "WebhookChannel",
+    # Hook System
+    "HookRunner",
+    "HookRegistration",
+    # Config Reload
+    "ConfigReloader",
+    "ReloadPlan",
     # CCP
     "CCPOrchestrator",
     "SenseLayer",
     "ThinkLayer",
+    "CommandLayer",
     "ControlLayer",
     "LearnLayer",
     "CycleResult",

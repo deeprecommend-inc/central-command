@@ -1,6 +1,17 @@
 """
-Command Layer - Web Agent and Browser Automation
+Command Layer - Web Agent, Browser Automation, and Channel Distribution
 """
+from .channels import (
+    Channel,
+    ChannelMeta,
+    ChannelStatus,
+    DeliveryResult,
+    ChannelRegistry,
+    SlackChannel,
+    TeamsChannel,
+    EmailChannel,
+    WebhookChannel,
+)
 from .stealth import (
     StealthConfig,
     StealthBrowser,
@@ -30,6 +41,16 @@ from .captcha_solver import (
 from .vision_captcha_solver import VisionCaptchaSolver
 
 __all__ = [
+    # Channels
+    "Channel",
+    "ChannelMeta",
+    "ChannelStatus",
+    "DeliveryResult",
+    "ChannelRegistry",
+    "SlackChannel",
+    "TeamsChannel",
+    "EmailChannel",
+    "WebhookChannel",
     # Stealth
     "StealthConfig",
     "StealthBrowser",

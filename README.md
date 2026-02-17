@@ -38,8 +38,9 @@ CCPは、点在するデータ、分断された判断、属人化した運用�
 +---------+ +-----------+ +---------------+ +---------+ +-----------+
      |            |               |               |            |
  EventBus     RulesEngine     WebAgent       Executor    KnowledgeStore
- Metrics      Strategy        Browser        StateMachine PatternDetector
+ Metrics      Strategy        Channels       StateMachine PatternDetector
  Snapshot     Decision        Proxy/UA       FeedbackLoop Analyzer
+                              HookRunner
 ```
 
 ---
@@ -146,7 +147,7 @@ decision = strategy.evaluate(context)
 
 ### Command層 - 指示生成・実行
 
-Web操作エージェントによる実行。
+Web操作エージェントとチャネル配信。
 
 ```python
 from src import WebAgent, AgentConfig
@@ -161,6 +162,70 @@ async with WebAgent(config) as agent:
     result = await agent.navigate("https://example.com")
     if result.success:
         print(f"Title: {result.data.get('title')}")
+```
+
+#### チャネル配信
+
+Slack / Teams / Email / Webhook への通知配信。
+
+```python
+from src import ChannelRegistry, SlackChannel, WebhookChannel
+
+registry = ChannelRegistry()
+registry.register(SlackChannel(webhook_url="https://hooks.slack.com/..."))
+registry.register(WebhookChannel(url="https://httpbin.org/post", channel_id="webhook_0"))
+
+# 単一チャネル送信
+result = await registry.send_to("slack", "#general", "Alert: CPU high")
+
+# 複数チャネル一斉送信
+results = await registry.broadcast(["slack", "webhook_0"], "#ops", "System alert")
+
+# ヘルスチェック
+statuses = await registry.health_check_all()
+```
+
+#### Hook/Plugin拡張
+
+CCPサイクルの各フェーズにフックを登録して拡張。
+
+```python
+from src import HookRunner
+from src.hooks import BEFORE_THINK, ON_ERROR
+
+runner = HookRunner()
+
+# Void hook（並列実行、エラー隔離）
+async def log_errors(event):
+    print(f"Error: {event}")
+
+runner.register(ON_ERROR, log_errors, plugin_id="logger")
+
+# Modifying hook（逐次実行、ペイロード変更可）
+async def inject_context(event):
+    event["extra_context"] = {"priority": "high"}
+    return event
+
+runner.register(BEFORE_THINK, inject_context, plugin_id="enricher", priority=100)
+```
+
+#### 設定ホットリロード
+
+.envファイルの変更を自動検知し、チャネル再登録等を実行。
+
+```python
+from src import ConfigReloader
+
+reloader = ConfigReloader(env_path=".env")
+
+async def on_change(plan):
+    if plan.reload_channels:
+        print("Reloading channels...")
+    if plan.restart_required:
+        print("Restart required for core settings")
+
+reloader.on_reload(on_change)
+await reloader.start()
 ```
 
 ### Control層 - 実行監視
@@ -325,6 +390,10 @@ asyncio.run(listen_events())
 | POST | `/approvals/{id}/reject` | 拒否 |
 | GET | `/thoughts` | 思考チェーン一覧 |
 | GET | `/experiences` | 経験一覧 |
+| GET | `/channels` | チャネル一覧 |
+| POST | `/channels/{id}/send` | チャネル送信 |
+| POST | `/channels/broadcast` | 一斉送信 |
+| GET | `/channels/health` | チャネルヘルス |
 | WS | `/ws/events` | イベントストリーム |
 
 OpenAPI Docs: `http://localhost:8000/docs`
@@ -350,6 +419,17 @@ python run.py demo
 
 # ヘルプ
 python run.py --help
+```
+
+### 通知・チャネル
+
+```bash
+# チャネル一覧
+python run.py channels
+
+# 通知送信
+python run.py notify --channel slack --to "#general" "Alert message"
+python run.py notify --channel webhook --to "https://httpbin.org/post" "Test notification"
 ```
 
 ### プロキシタイプ選択
@@ -482,15 +562,18 @@ python browse.py --model gpt-4o-mini "Get the title of https://example.com"
 | `PatternDetector` | パターン・異常検出 |
 | `PerformanceAnalyzer` | パフォーマンス分析 |
 
-### Command Layer (WebAgent)
+### Command Layer
 
-| メソッド | 説明 |
-|---------|------|
-| `navigate(url)` | 単一URLにアクセス |
-| `parallel_navigate(urls)` | 複数URLに並列アクセス |
-| `run_custom_task(task_id, task_fn)` | カスタムタスクを実行 |
-| `get_proxy_stats()` | プロキシ統計を取得 |
-| `health_check()` | ライブヘルスチェック実行 |
+| クラス | 説明 |
+|--------|------|
+| `WebAgent` | Web操作エージェント |
+| `ChannelRegistry` | チャネル管理・配信 |
+| `SlackChannel` | Slack通知 |
+| `TeamsChannel` | Teams通知 |
+| `EmailChannel` | SMTP Email通知 |
+| `WebhookChannel` | 汎用Webhook通知 |
+| `HookRunner` | Hook/Plugin拡張 |
+| `ConfigReloader` | 設定ホットリロード |
 
 ---
 
@@ -932,6 +1015,23 @@ docker-compose logs -f ccp-api
 
 ---
 
+## チャネル環境変数
+
+| 変数 | 説明 |
+|------|------|
+| `SLACK_WEBHOOK_URL` | Slack Incoming Webhook URL |
+| `SLACK_BOT_TOKEN` | Slack Bot Token |
+| `SLACK_DEFAULT_CHANNEL` | デフォルトSlackチャネル |
+| `TEAMS_WEBHOOK_URL` | Teams Incoming Webhook URL |
+| `EMAIL_SMTP_HOST` | SMTPサーバーホスト |
+| `EMAIL_SMTP_PORT` | SMTPポート (デフォルト: 587) |
+| `EMAIL_SMTP_USER` | SMTPユーザー名 |
+| `EMAIL_SMTP_PASSWORD` | SMTPパスワード |
+| `EMAIL_FROM` | 送信元メールアドレス |
+| `WEBHOOK_URLS` | カンマ区切りWebhook URL |
+
+---
+
 ## テスト
 
 ```bash
@@ -944,9 +1044,12 @@ pytest tests/ --cov=src
 # 特定レイヤーのテスト
 pytest tests/test_sense/ -v
 pytest tests/test_think/ -v
+pytest tests/test_command/ -v
 pytest tests/test_control/ -v
 pytest tests/test_learn/ -v
 pytest tests/test_ccp.py -v
+pytest tests/test_hooks.py -v
+pytest tests/test_config_reload.py -v
 ```
 
 ---
@@ -977,7 +1080,16 @@ src/
 │   ├── human_in_loop.py     # v2 Human-in-the-Loop
 │   ├── thought_log.py       # v2 Chain of Thought Log
 │   └── graph_workflow.py    # v2 LangGraph Workflow
+├── hooks.py                 # Hook/Plugin拡張
+├── config_reload.py         # 設定ホットリロード
 ├── command/                 # Command層
+│   ├── channels/            # チャネル配信
+│   │   ├── protocol.py      # Channel Protocol
+│   │   ├── registry.py      # ChannelRegistry
+│   │   ├── slack.py         # Slack
+│   │   ├── teams.py         # Teams
+│   │   ├── email.py         # Email (SMTP)
+│   │   └── webhook.py       # 汎用Webhook
 │   ├── stealth.py           # v5 Stealth Browser
 │   ├── human_behavior.py    # v5 Human-like Behavior
 │   ├── captcha_solver.py    # v5 CAPTCHA Solver

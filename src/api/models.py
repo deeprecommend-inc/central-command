@@ -330,3 +330,35 @@ class ThoughtLogStatsResponse(BaseModel):
     avg_steps: float
     max_duration_ms: float
     min_duration_ms: float
+
+
+# =============================================================================
+# Channel Models
+# =============================================================================
+
+class ChannelSendRequest(BaseModel):
+    """Request to send a message via a channel"""
+    to: str = Field(..., description="Recipient (channel name, email, URL)")
+    text: str = Field(..., description="Message text")
+    media_url: str | None = Field(default=None, description="Optional media URL")
+    thread_id: str | None = Field(default=None, description="Optional thread ID")
+
+
+class BroadcastRequest(BaseModel):
+    """Request to broadcast a message to multiple channels"""
+    channel_ids: list[str] = Field(..., min_length=1, description="Target channel IDs")
+    to: str = Field(..., description="Recipient")
+    text: str = Field(..., description="Message text")
+
+
+class ChannelSendResponse(BaseModel):
+    """Response for a channel send operation"""
+    channel_id: str
+    success: bool
+    message_id: str = ""
+    error: str = ""
+
+
+class ChannelHealthResponse(BaseModel):
+    """Health status of all channels"""
+    channels: dict[str, str]

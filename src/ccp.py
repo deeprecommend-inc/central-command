@@ -23,6 +23,16 @@ from .learn import (
     PatternDetector, PerformanceAnalyzer, PerformanceReport
 )
 from .web_agent import WebAgent, AgentConfig
+from .command.channels import ChannelRegistry, SlackChannel, TeamsChannel, EmailChannel, WebhookChannel
+from .hooks import (
+    HookRunner,
+    ON_CYCLE_START, ON_CYCLE_END,
+    BEFORE_SENSE, AFTER_SENSE,
+    BEFORE_THINK, AFTER_THINK,
+    BEFORE_COMMAND, AFTER_COMMAND,
+    BEFORE_CONTROL, AFTER_CONTROL,
+    ON_ERROR,
+)
 
 
 @dataclass
@@ -180,6 +190,57 @@ class LearnLayer:
         return self.analyzer.generate_report()
 
 
+class CommandLayer:
+    """Aggregated Command layer - channel distribution"""
+
+    def __init__(self, event_bus: Optional[EventBus] = None):
+        self.channels = ChannelRegistry()
+        self._event_bus = event_bus
+
+    async def send_notification(
+        self,
+        channel_id: str,
+        to: str,
+        text: str,
+    ) -> dict:
+        """Send notification via a specific channel"""
+        result = await self.channels.send_to(channel_id, to, text)
+        if self._event_bus:
+            await self._event_bus.publish(Event(
+                event_type="command.notification.sent",
+                source="command",
+                data={
+                    "channel_id": channel_id,
+                    "to": to,
+                    "success": result.success,
+                },
+            ))
+        return {
+            "channel_id": result.channel_id,
+            "success": result.success,
+            "message_id": result.message_id,
+            "error": result.error,
+        }
+
+    async def broadcast_notification(
+        self,
+        channel_ids: list[str],
+        to: str,
+        text: str,
+    ) -> list[dict]:
+        """Broadcast notification to multiple channels"""
+        results = await self.channels.broadcast(channel_ids, to, text)
+        return [
+            {
+                "channel_id": r.channel_id,
+                "success": r.success,
+                "message_id": r.message_id,
+                "error": r.error,
+            }
+            for r in results
+        ]
+
+
 class CCPOrchestrator:
     """
     Central Command Platform Orchestrator.
@@ -205,16 +266,19 @@ class CCPOrchestrator:
 
         self.sense = SenseLayer()
         self.think = ThinkLayer()
+        self.command = CommandLayer(event_bus=self.sense.event_bus)
         self.control = ControlLayer(event_bus=self.sense.event_bus)
         self.learn = LearnLayer(
             metrics_collector=self.sense.metrics,
             state_snapshot=self.sense.snapshot,
         )
+        self.hooks = HookRunner()
 
         self._web_agent = web_agent
         self._owns_web_agent = web_agent is None
 
         self.control.feedback_loop.on_adjustment(self._handle_adjustment)
+        self._setup_channels()
 
     async def __aenter__(self) -> "CCPOrchestrator":
         """Async context manager entry"""
@@ -274,8 +338,14 @@ class CCPOrchestrator:
 
         logger.info(f"Starting CCP cycle {self._cycle_count}: {task_type} -> {target}")
 
+        await self.hooks.run_void(ON_CYCLE_START, {
+            "cycle_number": self._cycle_count, "task_type": task_type, "target": target,
+        })
+
+        await self.hooks.run_void(BEFORE_SENSE, {"cycle_number": self._cycle_count})
         state = self.sense.get_state()
         self.sense.snapshot.save_snapshot()
+        await self.hooks.run_void(AFTER_SENSE, {"state": state.to_dict()})
 
         task_context = TaskContext(
             task_id=task_id,
@@ -285,7 +355,15 @@ class CCPOrchestrator:
         )
 
         events = self.sense.event_bus.get_history(limit=20)
+        think_context = await self.hooks.run_modifying(BEFORE_THINK, {
+            "state": state.to_dict(),
+            "task_context": {"task_id": task_id, "task_type": task_type},
+            "events_count": len(events),
+        })
         decision = self.think.decide(state, task_context, events)
+        await self.hooks.run_void(AFTER_THINK, {
+            "decision": decision.to_dict(),
+        })
         logger.debug(f"Decision: {decision.action} ({decision.reasoning})")
 
         if decision.action == "abort":
@@ -317,12 +395,21 @@ class CCPOrchestrator:
             max_retries=self._config.max_retries,
         )
 
+        await self.hooks.run_void(BEFORE_COMMAND, {"task_id": task_id, "task_type": task_type})
+
         async def execute_task(t: Task) -> ExecutionResult:
             return await self._execute_command(t)
 
         result = await self.control.execute(task, execute_task)
+        await self.hooks.run_void(AFTER_COMMAND, {
+            "task_id": task_id, "success": result.success,
+        })
 
+        await self.hooks.run_void(BEFORE_CONTROL, {"task_id": task_id})
         feedback = await self.control.process_result(result)
+        await self.hooks.run_void(AFTER_CONTROL, {
+            "task_id": task_id, "feedback_count": len(feedback),
+        })
 
         self._record_learning(result, decision, feedback)
 
@@ -354,6 +441,13 @@ class CCPOrchestrator:
             duration=time.time() - cycle_start,
             cycle_number=self._cycle_count,
         )
+
+        await self.hooks.run_void(ON_CYCLE_END, {
+            "task_id": task_id,
+            "success": result.success,
+            "duration": cycle_result.duration,
+            "cycle_number": self._cycle_count,
+        })
 
         logger.info(
             f"CCP cycle {self._cycle_count} completed: "
@@ -403,6 +497,28 @@ class CCPOrchestrator:
                     retries=result.retries,
                     duration=result.duration,
                 )
+            elif task.task_type == "notify":
+                channel_id = task.params.get("channel_id", "")
+                to = task.params.get("to", "")
+                text = task.params.get("text", task.target)
+                r = await self.command.send_notification(channel_id, to, text)
+                return ExecutionResult(
+                    task_id=task.task_id,
+                    success=r["success"],
+                    data=r,
+                    error=r.get("error", ""),
+                )
+            elif task.task_type == "broadcast":
+                channel_ids = task.params.get("channel_ids", [])
+                to = task.params.get("to", "")
+                text = task.params.get("text", task.target)
+                results = await self.command.broadcast_notification(channel_ids, to, text)
+                success = any(r["success"] for r in results) if results else False
+                return ExecutionResult(
+                    task_id=task.task_id,
+                    success=success,
+                    data={"results": results},
+                )
             else:
                 return ExecutionResult(
                     task_id=task.task_id,
@@ -412,6 +528,9 @@ class CCPOrchestrator:
                 )
         except Exception as e:
             logger.error(f"Command execution error: {e}")
+            await self.hooks.run_void(ON_ERROR, {
+                "task_id": task.task_id, "error": str(e),
+            })
             return ExecutionResult(
                 task_id=task.task_id,
                 success=False,
@@ -466,12 +585,49 @@ class CCPOrchestrator:
             "think": {
                 "rules": len(self.think.rules_engine),
             },
+            "command": self.command.channels.get_stats(),
             "control": self.control.executor.get_stats(),
             "learn": {
                 "knowledge": self.learn.knowledge.get_stats(),
             },
+            "hooks": self.hooks.get_stats(),
         }
 
     def get_report(self) -> PerformanceReport:
         """Generate performance report"""
         return self.learn.generate_report()
+
+    def _setup_channels(self) -> None:
+        """Auto-register channels from settings"""
+        try:
+            from config.settings import settings
+        except Exception:
+            return
+
+        if settings.slack_webhook_url or settings.slack_bot_token:
+            self.command.channels.register(SlackChannel(
+                webhook_url=settings.slack_webhook_url,
+                bot_token=settings.slack_bot_token,
+                default_channel=settings.slack_default_channel,
+            ))
+        if settings.teams_webhook_url:
+            self.command.channels.register(TeamsChannel(
+                webhook_url=settings.teams_webhook_url,
+            ))
+        if settings.email_smtp_host:
+            self.command.channels.register(EmailChannel(
+                smtp_host=settings.email_smtp_host,
+                smtp_port=settings.email_smtp_port,
+                smtp_user=settings.email_smtp_user,
+                smtp_password=settings.email_smtp_password,
+                from_address=settings.email_from,
+            ))
+        if settings.webhook_urls:
+            for i, url in enumerate(settings.webhook_urls.split(",")):
+                url = url.strip()
+                if url:
+                    self.command.channels.register(WebhookChannel(
+                        url=url,
+                        channel_id=f"webhook_{i}",
+                        label=f"Webhook {i}",
+                    ))

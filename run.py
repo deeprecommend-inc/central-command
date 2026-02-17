@@ -224,6 +224,8 @@ Commands:
   url <url> [url2...]     Navigate to URL(s) with proxy/UA rotation
   health                  Check proxy health status
   ai <task>               Run AI-driven task with CAPTCHA support
+  notify <text>           Send notification via channel
+  channels                List registered notification channels
   demo                    Run demo with test URLs
   test                    Test basic functionality
 
@@ -241,6 +243,10 @@ Other Options:
   --json                  Output in JSON format
   --verbose, -v           Verbose logging
 
+Notify Options:
+  --channel <id>          Channel ID (default: webhook)
+  --to <recipient>        Recipient (channel name, email, URL)
+
 Examples:
   python run.py url https://httpbin.org/ip
   python run.py url --mobile https://example.com
@@ -250,6 +256,9 @@ Examples:
   python run.py demo --no-proxy
   python run.py ai "Go to example.com and solve the CAPTCHA" --no-proxy
   python run.py ai --captcha-solver 2captcha "Navigate to site and login"
+  python run.py channels
+  python run.py notify --channel slack --to "#general" "Alert message"
+  python run.py notify --channel webhook --to "https://httpbin.org/post" "Test"
 
 Environment Variables:
   BRIGHTDATA_USERNAME     BrightData proxy username (optional)
@@ -263,9 +272,113 @@ Environment Variables:
   OPENAI_MODEL            OpenAI model (default: gpt-4o)
   TWOCAPTCHA_API_KEY      2captcha API key (optional fallback)
   ANTICAPTCHA_API_KEY     Anti-Captcha API key (optional fallback)
+  SLACK_WEBHOOK_URL       Slack Incoming Webhook URL
+  SLACK_BOT_TOKEN         Slack Bot Token
+  SLACK_DEFAULT_CHANNEL   Slack default channel
+  TEAMS_WEBHOOK_URL       Teams Incoming Webhook URL
+  EMAIL_SMTP_HOST         SMTP server host
+  EMAIL_SMTP_PORT         SMTP port (default: 587)
+  EMAIL_SMTP_USER         SMTP username
+  EMAIL_SMTP_PASSWORD     SMTP password
+  EMAIL_FROM              Sender email address
+  WEBHOOK_URLS            Comma-separated webhook URLs
 
 Note: BRIGHTDATA settings are optional. Without them, the agent runs with direct connection.
 """)
+
+
+async def run_notify(channel_id: str, to: str, text: str):
+    """Send notification via a channel"""
+    from src.command.channels import ChannelRegistry, WebhookChannel, SlackChannel, TeamsChannel, EmailChannel
+
+    registry = ChannelRegistry()
+
+    # Auto-register channels from settings
+    try:
+        from config.settings import settings
+
+        if settings.slack_webhook_url or settings.slack_bot_token:
+            registry.register(SlackChannel(
+                webhook_url=settings.slack_webhook_url,
+                bot_token=settings.slack_bot_token,
+                default_channel=settings.slack_default_channel,
+            ))
+        if settings.teams_webhook_url:
+            registry.register(TeamsChannel(webhook_url=settings.teams_webhook_url))
+        if settings.email_smtp_host:
+            registry.register(EmailChannel(
+                smtp_host=settings.email_smtp_host,
+                smtp_port=settings.email_smtp_port,
+                smtp_user=settings.email_smtp_user,
+                smtp_password=settings.email_smtp_password,
+                from_address=settings.email_from,
+            ))
+        if settings.webhook_urls:
+            for i, url in enumerate(settings.webhook_urls.split(",")):
+                url = url.strip()
+                if url:
+                    registry.register(WebhookChannel(
+                        url=url, channel_id=f"webhook_{i}", label=f"Webhook {i}",
+                    ))
+    except Exception:
+        pass
+
+    # If channel not found, try to use it as a webhook
+    try:
+        registry.get(channel_id)
+    except KeyError:
+        registry.register(WebhookChannel(channel_id=channel_id, label=channel_id))
+
+    result = await registry.send_to(channel_id, to, text)
+    if result.success:
+        logger.info(f"Sent to {channel_id}: {result.message_id}")
+    else:
+        logger.error(f"Failed: {result.error}")
+
+
+async def run_list_channels():
+    """List registered channels"""
+    from src.command.channels import ChannelRegistry, WebhookChannel, SlackChannel, TeamsChannel, EmailChannel
+
+    registry = ChannelRegistry()
+
+    try:
+        from config.settings import settings
+
+        if settings.slack_webhook_url or settings.slack_bot_token:
+            registry.register(SlackChannel(
+                webhook_url=settings.slack_webhook_url,
+                bot_token=settings.slack_bot_token,
+                default_channel=settings.slack_default_channel,
+            ))
+        if settings.teams_webhook_url:
+            registry.register(TeamsChannel(webhook_url=settings.teams_webhook_url))
+        if settings.email_smtp_host:
+            registry.register(EmailChannel(
+                smtp_host=settings.email_smtp_host,
+                smtp_port=settings.email_smtp_port,
+                smtp_user=settings.email_smtp_user,
+                smtp_password=settings.email_smtp_password,
+                from_address=settings.email_from,
+            ))
+        if settings.webhook_urls:
+            for i, url in enumerate(settings.webhook_urls.split(",")):
+                url = url.strip()
+                if url:
+                    registry.register(WebhookChannel(
+                        url=url, channel_id=f"webhook_{i}", label=f"Webhook {i}",
+                    ))
+    except Exception:
+        pass
+
+    channels = registry.list_channels()
+    if not channels:
+        print("No channels registered. Set environment variables to configure channels.")
+        return
+
+    print(f"\nRegistered Channels ({len(channels)}):")
+    for ch in channels:
+        print(f"  [{ch['id']}] {ch['label']} - {ch['description']}")
 
 
 async def run_demo(proxy_type: str = "residential"):
@@ -320,6 +433,31 @@ def main():
             print("Error: Tasks required")
             sys.exit(1)
         asyncio.run(run_parallel_ai(args, proxy_type, options["captcha_solver"]))
+
+    elif command == "notify":
+        # Parse --channel and --to
+        channel_id = "webhook"
+        to = ""
+        text_parts = []
+        i = 0
+        while i < len(args):
+            if args[i] == "--channel" and i + 1 < len(args):
+                channel_id = args[i + 1]
+                i += 2
+            elif args[i] == "--to" and i + 1 < len(args):
+                to = args[i + 1]
+                i += 2
+            else:
+                text_parts.append(args[i])
+                i += 1
+        text = " ".join(text_parts)
+        if not text:
+            print("Error: Message text required")
+            sys.exit(1)
+        asyncio.run(run_notify(channel_id, to, text))
+
+    elif command == "channels":
+        asyncio.run(run_list_channels())
 
     elif command == "demo":
         asyncio.run(run_demo(proxy_type))

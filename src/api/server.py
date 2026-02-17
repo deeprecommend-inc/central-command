@@ -50,9 +50,16 @@ from .models import (
     ThoughtChainListResponse,
     ThoughtLogStatsResponse,
     TransitionResponse,
+    # Channel models
+    ChannelSendRequest,
+    BroadcastRequest,
+    ChannelSendResponse,
+    ChannelHealthResponse,
 )
 from ..learn import ExperienceStore, ReplayEngine, ReplayConfig
 from ..sense import EventBus, Event
+from ..command.channels import ChannelRegistry, SlackChannel, TeamsChannel, EmailChannel, WebhookChannel
+from ..config_reload import ConfigReloader
 from ..think import (
     CCPGraphWorkflow,
     LLMConfig,
@@ -112,8 +119,50 @@ class CCPState:
         # v2: Thought Logger (shared with workflow)
         self.thought_logger = self.workflow.thought_logger
 
+        # Channels
+        self.channel_registry = ChannelRegistry()
+        self._setup_channels()
+
+        # Config reloader
+        self.config_reloader = ConfigReloader()
+
         # Set up workflow executors
         self._setup_workflow_executors()
+
+    def _setup_channels(self):
+        """Auto-register channels from settings"""
+        try:
+            from config.settings import settings
+        except Exception:
+            return
+
+        if settings.slack_webhook_url or settings.slack_bot_token:
+            self.channel_registry.register(SlackChannel(
+                webhook_url=settings.slack_webhook_url,
+                bot_token=settings.slack_bot_token,
+                default_channel=settings.slack_default_channel,
+            ))
+        if settings.teams_webhook_url:
+            self.channel_registry.register(TeamsChannel(
+                webhook_url=settings.teams_webhook_url,
+            ))
+        if settings.email_smtp_host:
+            self.channel_registry.register(EmailChannel(
+                smtp_host=settings.email_smtp_host,
+                smtp_port=settings.email_smtp_port,
+                smtp_user=settings.email_smtp_user,
+                smtp_password=settings.email_smtp_password,
+                from_address=settings.email_from,
+            ))
+        if settings.webhook_urls:
+            for i, url in enumerate(settings.webhook_urls.split(",")):
+                url = url.strip()
+                if url:
+                    self.channel_registry.register(WebhookChannel(
+                        url=url,
+                        channel_id=f"webhook_{i}",
+                        label=f"Webhook {i}",
+                    ))
 
     def _setup_workflow_executors(self):
         """Configure workflow layer executors"""
@@ -257,10 +306,19 @@ async def lifespan(app: FastAPI):
 
     ccp.event_bus.subscribe("*", event_handler)
 
+    # Start config reloader
+    async def on_config_reload(plan):
+        if plan.reload_channels:
+            ccp.channel_registry = ChannelRegistry()
+            ccp._setup_channels()
+
+    ccp.config_reloader.on_reload(on_config_reload)
+    await ccp.config_reloader.start()
+
     yield
 
     # Shutdown
-    pass
+    await ccp.config_reloader.stop()
 
 
 def create_app() -> FastAPI:
@@ -718,6 +776,72 @@ def register_routes(app: FastAPI) -> None:
             avg_steps=stats.get("avg_steps", 0),
             max_duration_ms=stats.get("max_duration_ms", 0),
             min_duration_ms=stats.get("min_duration_ms", 0),
+        )
+
+    # =========================================================================
+    # Channels
+    # =========================================================================
+
+    @app.get("/channels", tags=["Channels"])
+    async def list_channels():
+        """List registered notification channels"""
+        ccp = get_ccp()
+        return {"channels": ccp.channel_registry.list_channels()}
+
+    @app.post(
+        "/channels/{channel_id}/send",
+        response_model=ChannelSendResponse,
+        tags=["Channels"],
+    )
+    async def send_channel_message(channel_id: str, request: ChannelSendRequest):
+        """Send a message via a specific channel"""
+        ccp = get_ccp()
+        try:
+            result = await ccp.channel_registry.send_to(
+                channel_id,
+                request.to,
+                request.text,
+                thread_id=request.thread_id or "",
+            )
+            return ChannelSendResponse(
+                channel_id=result.channel_id,
+                success=result.success,
+                message_id=result.message_id,
+                error=result.error,
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Channel not found: {channel_id}")
+
+    @app.post("/channels/broadcast", tags=["Channels"])
+    async def broadcast_message(request: BroadcastRequest):
+        """Broadcast a message to multiple channels"""
+        ccp = get_ccp()
+        results = await ccp.channel_registry.broadcast(
+            request.channel_ids, request.to, request.text,
+        )
+        return {
+            "results": [
+                {
+                    "channel_id": r.channel_id,
+                    "success": r.success,
+                    "message_id": r.message_id,
+                    "error": r.error,
+                }
+                for r in results
+            ]
+        }
+
+    @app.get(
+        "/channels/health",
+        response_model=ChannelHealthResponse,
+        tags=["Channels"],
+    )
+    async def channel_health():
+        """Check health of all registered channels"""
+        ccp = get_ccp()
+        statuses = await ccp.channel_registry.health_check_all()
+        return ChannelHealthResponse(
+            channels={cid: status.value for cid, status in statuses.items()}
         )
 
     @app.post("/thoughts/export", tags=["Thoughts"])
