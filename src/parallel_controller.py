@@ -133,12 +133,19 @@ class ParallelController:
         error_lower = error.lower()
         return any(e in error_lower for e in proxy_errors)
 
-    async def _publish_event(self, event_type: str, data: dict) -> None:
-        """Publish event to event bus if available"""
+    def _publish_event(self, event_type: str, data: dict) -> None:
+        """Publish event to event bus if available (fire-and-forget)."""
         if self._event_bus:
             from .sense import Event
             event = Event(event_type=event_type, source="parallel_controller", data=data)
+            asyncio.create_task(self._safe_publish(event))
+
+    async def _safe_publish(self, event) -> None:
+        """Safely publish event, swallowing errors."""
+        try:
             await self._event_bus.publish(event)
+        except Exception as e:
+            logger.debug(f"Event publish error (ignored): {e}")
 
     async def run_task(
         self,
@@ -153,7 +160,7 @@ class ParallelController:
         start_time = time.time()
 
         # Publish task started event
-        await self._publish_event("task.started", {"task_id": task_id, "worker_id": worker_id})
+        self._publish_event("task.started", {"task_id": task_id, "worker_id": worker_id})
 
         async with self._semaphore:
             for attempt in range(self.max_retries + 1):
@@ -188,7 +195,7 @@ class ParallelController:
                             self._metrics.record("task.success", 1.0, {"task_id": task_id})
                             self._metrics.increment("task.total_success")
                         # Publish success event
-                        await self._publish_event("task.completed", {
+                        self._publish_event("task.completed", {
                             "task_id": task_id,
                             "success": True,
                             "retries": attempt,
@@ -215,7 +222,7 @@ class ParallelController:
                         )
                         retries = attempt + 1
                         # Publish retry event
-                        await self._publish_event("task.retry", {
+                        self._publish_event("task.retry", {
                             "task_id": task_id,
                             "attempt": attempt + 1,
                             "error": result.error,
@@ -233,7 +240,7 @@ class ParallelController:
                         self._metrics.record("task.failure", 1.0, {"task_id": task_id, "error_type": result.error_type.value if result.error_type else "unknown"})
                         self._metrics.increment("task.total_failure")
                     # Publish failure event
-                    await self._publish_event("task.failed", {
+                    self._publish_event("task.failed", {
                         "task_id": task_id,
                         "error": result.error,
                         "error_type": result.error_type.value if result.error_type else "unknown",
@@ -272,7 +279,7 @@ class ParallelController:
                         delay = self._calculate_delay(attempt)
                         logger.warning(f"Retrying in {delay:.1f}s with new proxy")
                         retries = attempt + 1
-                        await self._publish_event("task.retry", {
+                        self._publish_event("task.retry", {
                             "task_id": task_id,
                             "attempt": attempt + 1,
                             "error": str(e),
@@ -287,7 +294,7 @@ class ParallelController:
                         self._metrics.record("task.duration", duration, {"task_id": task_id})
                         self._metrics.record("task.failure", 1.0, {"task_id": task_id, "error_type": last_error_type.value})
                         self._metrics.increment("task.total_failure")
-                    await self._publish_event("task.failed", {
+                    self._publish_event("task.failed", {
                         "task_id": task_id,
                         "error": str(e),
                         "error_type": last_error_type.value,
@@ -312,7 +319,7 @@ class ParallelController:
                 self._metrics.record("task.duration", duration, {"task_id": task_id})
                 self._metrics.record("task.failure", 1.0, {"task_id": task_id, "error_type": "max_retries"})
                 self._metrics.increment("task.total_failure")
-            await self._publish_event("task.failed", {
+            self._publish_event("task.failed", {
                 "task_id": task_id,
                 "error": f"Max retries exceeded: {last_error}",
                 "error_type": last_error_type.value if last_error_type else "unknown",

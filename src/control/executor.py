@@ -3,6 +3,7 @@ Executor - Task execution management
 """
 import asyncio
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Optional
 from loguru import logger
@@ -83,13 +84,15 @@ class Executor:
         self,
         event_bus: Optional[EventBus] = None,
         max_concurrent: int = 10,
+        max_results: int = 10000,
     ):
         self._event_bus = event_bus
         self._registry = StateMachineRegistry()
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._pause_events: dict[str, asyncio.Event] = {}
         self._cancel_flags: dict[str, bool] = {}
-        self._results: dict[str, ExecutionResult] = {}
+        self._results: OrderedDict[str, ExecutionResult] = OrderedDict()
+        self._max_results = max_results
 
     async def execute(
         self,
@@ -177,6 +180,8 @@ class Executor:
         finally:
             result.duration = time.time() - start_time
             self._results[task.task_id] = result
+            while len(self._results) > self._max_results:
+                self._results.popitem(last=False)
             await self._publish_event(
                 "task.completed" if result.success else "task.failed",
                 task.task_id,

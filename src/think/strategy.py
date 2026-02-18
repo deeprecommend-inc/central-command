@@ -17,19 +17,34 @@ class Decision:
     confidence: float = 1.0
     reasoning: str = ""
     priority: int = 0  # Higher = more important
+    signature: Any = None  # PQC signature, optional
 
     def __post_init__(self):
         if not 0 <= self.confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "action": self.action,
             "params": self.params,
             "confidence": self.confidence,
             "reasoning": self.reasoning,
             "priority": self.priority,
         }
+        if self.signature is not None:
+            d["signature"] = self.signature.to_dict() if hasattr(self.signature, "to_dict") else str(self.signature)
+        return d
+
+    def signable_bytes(self) -> bytes:
+        """Deterministic JSON serialization for signing"""
+        import json
+        payload = {
+            "action": self.action,
+            "params": self.params,
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
 
 
 class Strategy(ABC):

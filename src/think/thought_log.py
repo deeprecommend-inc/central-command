@@ -3,6 +3,7 @@ Thought Log - Chain of Thought logging and storage
 """
 import json
 import os
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -161,7 +162,7 @@ class ThoughtLogger:
         self.max_chains = max_chains
         self.auto_save = auto_save
         self._active_chains: dict[str, ThoughtChain] = {}
-        self._completed_chains: list[ThoughtChain] = []
+        self._completed_chains: deque[ThoughtChain] = deque(maxlen=max_chains)
 
         if self.log_dir:
             self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -286,10 +287,6 @@ class ThoughtLogger:
         chain.complete(decision, outcome)
         self._completed_chains.append(chain)
 
-        # Enforce max chains limit
-        while len(self._completed_chains) > self.max_chains:
-            self._completed_chains.pop(0)
-
         logger.info(
             f"Completed thought chain {cycle_id}: "
             f"{len(chain.steps)} steps, "
@@ -368,12 +365,10 @@ class ThoughtLogger:
         task_id: Optional[str] = None,
     ) -> list[ThoughtChain]:
         """Get completed chains with optional filtering"""
-        chains = self._completed_chains
-
         if task_id:
-            chains = [c for c in chains if c.task_id == task_id]
-
-        return chains[-limit:]
+            chains = [c for c in self._completed_chains if c.task_id == task_id]
+            return chains[-limit:]
+        return list(self._completed_chains)[-limit:]
 
     def get_stats(self) -> dict:
         """Get logger statistics"""
@@ -412,7 +407,7 @@ class ThoughtLogger:
         Returns:
             Number of chains exported
         """
-        chains = self._completed_chains[-limit:]
+        chains = list(self._completed_chains)[-limit:]
 
         data = {
             "exported_at": datetime.now().isoformat(),

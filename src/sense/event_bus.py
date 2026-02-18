@@ -3,9 +3,9 @@ Event Bus - Pub/Sub event system
 """
 import asyncio
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Optional
-from collections import defaultdict
 from loguru import logger
 
 
@@ -44,7 +44,7 @@ class EventBus:
     def __init__(self, max_history: int = 1000):
         self._subscribers: dict[str, list[EventHandler]] = defaultdict(list)
         self._wildcard_subscribers: list[EventHandler] = []
-        self._history: list[Event] = []
+        self._history: deque[Event] = deque(maxlen=max_history)
         self._max_history = max_history
         self._lock = asyncio.Lock()
 
@@ -89,10 +89,7 @@ class EventBus:
         Returns:
             Number of handlers that received the event
         """
-        async with self._lock:
-            self._history.append(event)
-            if len(self._history) > self._max_history:
-                self._history = self._history[-self._max_history:]
+        self._history.append(event)
 
         handlers = list(self._subscribers.get(event.event_type, []))
         handlers.extend(self._wildcard_subscribers)
@@ -101,10 +98,7 @@ class EventBus:
             logger.debug(f"No subscribers for '{event.event_type}'")
             return 0
 
-        tasks = []
-        for handler in handlers:
-            tasks.append(self._safe_call(handler, event))
-
+        tasks = [self._safe_call(handler, event) for handler in handlers]
         await asyncio.gather(*tasks)
         logger.debug(f"Published '{event.event_type}' to {len(handlers)} handlers")
         return len(handlers)
@@ -128,14 +122,14 @@ class EventBus:
             event_type: Filter by event type (None for all)
             limit: Maximum events to return
         """
-        events = self._history
         if event_type:
-            events = [e for e in events if e.event_type == event_type]
-        return events[-limit:]
+            events = [e for e in self._history if e.event_type == event_type]
+            return events[-limit:]
+        return list(self._history)[-limit:]
 
     def clear_history(self) -> None:
         """Clear event history"""
-        self._history = []
+        self._history.clear()
 
     def get_subscriber_count(self, event_type: Optional[str] = None) -> int:
         """Get number of subscribers"""
@@ -207,10 +201,7 @@ class RedisEventBus(EventBus):
     async def publish(self, event: Event) -> int:
         """Publish event to Redis and local subscribers"""
         # Store in local history
-        async with self._lock:
-            self._history.append(event)
-            if len(self._history) > self._max_history:
-                self._history = self._history[-self._max_history:]
+        self._history.append(event)
 
         # Publish to Redis
         redis_client = await self._get_redis()

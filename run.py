@@ -226,6 +226,7 @@ Commands:
   ai <task>               Run AI-driven task with CAPTCHA support
   notify <text>           Send notification via channel
   channels                List registered notification channels
+  vault <subcmd>          Manage encrypted credential vault
   demo                    Run demo with test URLs
   test                    Test basic functionality
 
@@ -259,6 +260,12 @@ Examples:
   python run.py channels
   python run.py notify --channel slack --to "#general" "Alert message"
   python run.py notify --channel webhook --to "https://httpbin.org/post" "Test"
+  python run.py vault init
+  python run.py vault set API_KEY sk-12345
+  python run.py vault get API_KEY
+  python run.py vault list
+  python run.py vault delete API_KEY
+  python run.py vault rotate
 
 Environment Variables:
   BRIGHTDATA_USERNAME     BrightData proxy username (optional)
@@ -459,6 +466,9 @@ def main():
     elif command == "channels":
         asyncio.run(run_list_channels())
 
+    elif command == "vault":
+        run_vault(args)
+
     elif command == "demo":
         asyncio.run(run_demo(proxy_type))
 
@@ -471,6 +481,72 @@ def main():
     else:
         print(f"Unknown command: {command}")
         print_usage()
+        sys.exit(1)
+
+
+def run_vault(args: list[str]):
+    """Manage encrypted credential vault"""
+    from src.security.vault import SecureVault
+    from config.settings import settings
+
+    vault = SecureVault(vault_dir=settings.vault_dir)
+
+    if not args:
+        print("Usage: python run.py vault <init|set|get|list|delete|rotate>")
+        sys.exit(1)
+
+    subcmd = args[0].lower()
+
+    if subcmd == "init":
+        vault.init()
+        print(f"Vault initialized at {settings.vault_dir}")
+
+    elif subcmd == "set":
+        if len(args) < 3:
+            print("Usage: python run.py vault set <key> <value>")
+            sys.exit(1)
+        vault.init()
+        vault.set(args[1], args[2])
+        print(f"Set: {args[1]}")
+
+    elif subcmd == "get":
+        if len(args) < 2:
+            print("Usage: python run.py vault get <key>")
+            sys.exit(1)
+        vault.init()
+        value = vault.get(args[1])
+        if value is None:
+            print(f"Key not found: {args[1]}")
+            sys.exit(1)
+        print(value)
+
+    elif subcmd == "list":
+        vault.init()
+        keys = vault.list_keys()
+        if not keys:
+            print("Vault is empty")
+        else:
+            for k in keys:
+                print(f"  {k}")
+
+    elif subcmd == "delete":
+        if len(args) < 2:
+            print("Usage: python run.py vault delete <key>")
+            sys.exit(1)
+        vault.init()
+        if vault.delete(args[1]):
+            print(f"Deleted: {args[1]}")
+        else:
+            print(f"Key not found: {args[1]}")
+            sys.exit(1)
+
+    elif subcmd == "rotate":
+        vault.init()
+        vault.rotate_keys()
+        print("Key rotation complete")
+
+    else:
+        print(f"Unknown vault command: {subcmd}")
         sys.exit(1)
 
 

@@ -45,6 +45,9 @@ from .thought_log import (
 # v2: Graph Workflow
 from .graph_workflow import CCPGraphWorkflow
 
+# Security Layer
+from ..security import LLMGuard, GuardConfig, PQCEngine, AuditLogger
+
 __all__ = [
     # v1 exports
     "DecisionContext",
@@ -81,4 +84,9 @@ __all__ = [
     "extract_thought_chain_from_state",
     # v2: Graph Workflow
     "CCPGraphWorkflow",
+    # Security
+    "LLMGuard",
+    "GuardConfig",
+    "PQCEngine",
+    "AuditLogger",
 ]

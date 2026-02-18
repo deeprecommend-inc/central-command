@@ -68,6 +68,14 @@ from .hooks import HookRunner, HookRegistration
 # Config Reload
 from .config_reload import ConfigReloader, ReloadPlan
 
+# Security Layer
+from .security import (
+    PQCEngine, PQCKeyPair, EncryptedPayload, Signature,
+    LLMGuard, GuardConfig, InjectionDetector,
+    AuditLogger, AuditEntry,
+    SecureVault, VaultEntry,
+)
+
 # CCP Orchestrator
 from .ccp import (
     CCPOrchestrator,
@@ -165,6 +173,18 @@ __all__ = [
     # Config Reload
     "ConfigReloader",
     "ReloadPlan",
+    # Security Layer
+    "PQCEngine",
+    "PQCKeyPair",
+    "EncryptedPayload",
+    "Signature",
+    "LLMGuard",
+    "GuardConfig",
+    "InjectionDetector",
+    "AuditLogger",
+    "AuditEntry",
+    "SecureVault",
+    "VaultEntry",
     # CCP
     "CCPOrchestrator",
     "SenseLayer",

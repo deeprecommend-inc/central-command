@@ -175,6 +175,46 @@ Verify that your proxy pool is healthy and responsive.
 python run.py health
 ```
 
+### 12. Encrypt credentials with PQC vault
+
+Store API keys and secrets encrypted with post-quantum cryptography. Keys never touch `.env` in plaintext.
+
+```bash
+# Initialize vault
+python run.py vault init
+
+# Store a secret
+python run.py vault set OPENAI_API_KEY sk-your-key-here
+
+# Retrieve
+python run.py vault get OPENAI_API_KEY
+
+# List stored keys
+python run.py vault list
+
+# Rotate encryption keys
+python run.py vault rotate
+```
+
+### 13. Tamper-proof decision audit trail
+
+Every LLM call and decision is logged with a cryptographic signature. Verify integrity at any time.
+
+```python
+from src.security import PQCEngine, AuditLogger
+
+engine = PQCEngine()
+signing_kp = engine.generate_signing_keypair()
+audit = AuditLogger(pqc_engine=engine, signing_keypair=signing_kp, log_file="audit.jsonl")
+
+# Entries are signed automatically
+audit.log_event("deployment", input_hash="abc", output_hash="def")
+
+# Verify all entries
+valid, invalid = audit.verify_all()
+print(f"{valid} valid, {invalid} invalid")
+```
+
 ## CLI Reference
 
 | Command | Description |
@@ -185,6 +225,7 @@ python run.py health
 | `python run.py health` | Proxy health check |
 | `python run.py channels` | List notification channels |
 | `python run.py notify` | Send notification |
+| `python run.py vault <cmd>` | Manage encrypted vault |
 | `python browse.py "<instruction>"` | Run browser-use directly |
 | `python simulate.py stats <file>` | Experience statistics |
 | `python simulate.py replay <file>` | Replay with policy |
@@ -276,9 +317,17 @@ docker-compose logs -f ccp-api             # View logs
 | `EMAIL_FROM` | Sender email address |
 | `WEBHOOK_URLS` | Comma-separated webhook URLs |
 
+### Security
+
+| Variable | Description |
+|----------|-------------|
+| `CCP_VAULT_ENABLED` | Enable credential vault (default: false) |
+| `CCP_VAULT_DIR` | Vault storage directory (default: .ccp_vault) |
+
 ## Testing
 
 ```bash
 pytest tests/ -v              # Run all tests
 pytest tests/ --cov=src       # With coverage
+pytest tests/test_security/ -v  # Security tests only
 ```

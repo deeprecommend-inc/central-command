@@ -2,10 +2,10 @@
 Metrics Collector - Time-series metrics collection
 """
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Optional
-from collections import defaultdict
 from loguru import logger
 
 
@@ -51,10 +51,10 @@ class MetricsCollector:
     """
 
     def __init__(self, max_points: int = 10000, retention_seconds: float = 3600):
-        self._metrics: dict[str, list[Metric]] = defaultdict(list)
+        self._metrics: dict[str, deque[Metric]] = {}
         self._max_points = max_points
         self._retention_seconds = retention_seconds
-        self._counters: dict[str, float] = defaultdict(float)
+        self._counters: dict[str, float] = {}
 
     def record(
         self,
@@ -71,11 +71,9 @@ class MetricsCollector:
             tags: Optional key-value tags
         """
         metric = Metric(name=name, value=value, tags=tags or {})
+        if name not in self._metrics:
+            self._metrics[name] = deque(maxlen=self._max_points)
         self._metrics[name].append(metric)
-
-        if len(self._metrics[name]) > self._max_points:
-            self._metrics[name] = self._metrics[name][-self._max_points:]
-
         logger.debug(f"Recorded metric: {name}={value}")
 
     def increment(self, name: str, value: float = 1.0) -> float:
@@ -89,7 +87,7 @@ class MetricsCollector:
         Returns:
             New counter value
         """
-        self._counters[name] += value
+        self._counters[name] = self._counters.get(name, 0.0) + value
         return self._counters[name]
 
     def get_counter(self, name: str) -> float:
@@ -152,7 +150,7 @@ class MetricsCollector:
         """Get latest N metrics"""
         if name not in self._metrics:
             return []
-        return self._metrics[name][-count:]
+        return list(self._metrics[name])[-count:]
 
     def get_all_names(self) -> list[str]:
         """Get all metric names"""
@@ -170,14 +168,13 @@ class MetricsCollector:
 
         for name in list(self._metrics.keys()):
             before = len(self._metrics[name])
-            self._metrics[name] = [
-                m for m in self._metrics[name]
-                if m.timestamp >= cutoff
-            ]
-            removed += before - len(self._metrics[name])
+            filtered = [m for m in self._metrics[name] if m.timestamp >= cutoff]
+            removed += before - len(filtered)
 
-            if not self._metrics[name]:
+            if not filtered:
                 del self._metrics[name]
+            else:
+                self._metrics[name] = deque(filtered, maxlen=self._max_points)
 
         if removed > 0:
             logger.debug(f"Cleaned up {removed} old metrics")

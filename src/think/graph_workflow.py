@@ -56,8 +56,22 @@ class CCPGraphWorkflow:
         llm_config: Optional[LLMConfig] = None,
         approval_config: Optional[ApprovalConfig] = None,
         thought_log_dir: Optional[str] = None,
+        llm_guard=None,
+        pqc_engine=None,
+        audit_logger=None,
     ):
-        self.llm_maker = LLMDecisionMaker(llm_config)
+        self.llm_guard = llm_guard
+        self.pqc_engine = pqc_engine
+        self.audit_logger = audit_logger
+        self._signing_keypair = None
+
+        # Generate signing keypair if PQC engine provided
+        if self.pqc_engine:
+            self._signing_keypair = self.pqc_engine.generate_signing_keypair()
+
+        self.llm_maker = LLMDecisionMaker(
+            llm_config, guard=llm_guard, audit_logger=audit_logger,
+        )
         self.approval_manager = HumanApprovalManager(approval_config)
         self.thought_logger = ThoughtLogger(log_dir=thought_log_dir)
         self.transition_decider = TransitionDecider(self.llm_maker)
@@ -71,9 +85,35 @@ class CCPGraphWorkflow:
         # Graph compiled flag
         self._graph = None
 
+    def _add_thought_step(self, state: AgentState, step: ThoughtStep) -> None:
+        """Add thought step, compatible with both LangGraph and fallback modes."""
+        if self._graph:
+            state["thought_chain"] = [step]
+        else:
+            chain = state.get("thought_chain", [])
+            chain.append(step)
+            state["thought_chain"] = chain
+
+    def _log_phase(
+        self,
+        state: AgentState,
+        step: ThoughtStep,
+        prev_phase: CCPPhase,
+        to_phase: CCPPhase,
+        reason: str,
+    ) -> None:
+        """Unified thought step + transition logging."""
+        self._add_thought_step(state, step)
+        self.thought_logger.log_step(state.get("cycle_id", ""), step)
+        self.thought_logger.log_transition(
+            state.get("cycle_id", ""), prev_phase, to_phase, reason,
+        )
+
     def configure_llm(self, config: LLMConfig) -> None:
         """Configure LLM for decision making"""
-        self.llm_maker = LLMDecisionMaker(config)
+        self.llm_maker = LLMDecisionMaker(
+            config, guard=self.llm_guard, audit_logger=self.audit_logger,
+        )
         self.transition_decider = TransitionDecider(self.llm_maker)
 
     def on_approval_request(self, handler: Callable) -> None:
@@ -314,7 +354,9 @@ class CCPGraphWorkflow:
                 state["metrics_summary"] = sense_result.get("metrics_summary", {})
             except Exception as e:
                 logger.error(f"Sense executor error: {e}")
-                state["error_history"] = state.get("error_history", []) + [f"sense_error: {e}"]
+                errors = state.get("error_history", [])
+                errors.append(f"sense_error: {e}")
+                state["error_history"] = errors
         else:
             # Default: create empty system state
             state["system_state"] = SystemState()
@@ -332,15 +374,7 @@ class CCPGraphWorkflow:
             confidence=1.0,
             duration_ms=(datetime.now() - start_time).total_seconds() * 1000,
         )
-        state["thought_chain"] = state.get("thought_chain", []) + [step]
-
-        # Log transition
-        self.thought_logger.log_transition(
-            state.get("cycle_id", ""),
-            prev_phase,
-            CCPPhase.SENSE,
-            TransitionReason.INITIAL.value,
-        )
+        self._log_phase(state, step, prev_phase, CCPPhase.SENSE, TransitionReason.INITIAL.value)
 
         return state
 
@@ -360,6 +394,12 @@ class CCPGraphWorkflow:
         state["decision_reasoning"] = decision.reasoning
         state["current_phase"] = CCPPhase.THINK
 
+        # Sign decision with PQC if engine provided
+        if self.pqc_engine and self._signing_keypair:
+            decision.signature = self.pqc_engine.sign(
+                decision.signable_bytes(), self._signing_keypair,
+            )
+
         # Check if approval is needed
         if self.llm_maker.requires_approval(decision):
             state["requires_approval"] = True
@@ -370,17 +410,7 @@ class CCPGraphWorkflow:
         else:
             state["requires_approval"] = False
 
-        # Add thought step
-        state["thought_chain"] = state.get("thought_chain", []) + [thought]
-
-        # Log to thought logger
-        self.thought_logger.log_step(state.get("cycle_id", ""), thought)
-        self.thought_logger.log_transition(
-            state.get("cycle_id", ""),
-            prev_phase,
-            CCPPhase.THINK,
-            TransitionReason.DATA_COLLECTED.value,
-        )
+        self._log_phase(state, thought, prev_phase, CCPPhase.THINK, TransitionReason.DATA_COLLECTED.value)
 
         return state
 
@@ -429,14 +459,7 @@ class CCPGraphWorkflow:
             confidence=1.0 if status == ApprovalStatus.APPROVED else 0.0,
             duration_ms=(datetime.now() - start_time).total_seconds() * 1000,
         )
-        state["thought_chain"] = state.get("thought_chain", []) + [step]
-
-        self.thought_logger.log_transition(
-            state.get("cycle_id", ""),
-            prev_phase,
-            CCPPhase.AWAITING_APPROVAL,
-            TransitionReason.LOW_CONFIDENCE.value,
-        )
+        self._log_phase(state, step, prev_phase, CCPPhase.AWAITING_APPROVAL, TransitionReason.LOW_CONFIDENCE.value)
 
         return state
 
@@ -457,13 +480,17 @@ class CCPGraphWorkflow:
                 state["command_error"] = result.get("error")
 
                 if not state["command_success"] and result.get("error"):
-                    state["error_history"] = state.get("error_history", []) + [result["error"]]
+                    errors = state.get("error_history", [])
+                    errors.append(result["error"])
+                    state["error_history"] = errors
 
             except Exception as e:
                 logger.error(f"Command executor error: {e}")
                 state["command_success"] = False
                 state["command_error"] = str(e)
-                state["error_history"] = state.get("error_history", []) + [str(e)]
+                errors = state.get("error_history", [])
+                errors.append(str(e))
+                state["error_history"] = errors
         else:
             # No executor - mark as failed
             state["command_success"] = False
@@ -480,15 +507,9 @@ class CCPGraphWorkflow:
             confidence=1.0 if state["command_success"] else 0.5,
             duration_ms=(datetime.now() - start_time).total_seconds() * 1000,
         )
-        state["thought_chain"] = state.get("thought_chain", []) + [step]
-
-        self.thought_logger.log_transition(
-            state.get("cycle_id", ""),
-            prev_phase,
-            CCPPhase.COMMAND,
-            TransitionReason.APPROVED.value if state.get("approval_status") == "approved"
-            else TransitionReason.DECISION_MADE.value,
-        )
+        reason = (TransitionReason.APPROVED.value if state.get("approval_status") == "approved"
+                  else TransitionReason.DECISION_MADE.value)
+        self._log_phase(state, step, prev_phase, CCPPhase.COMMAND, reason)
 
         return state
 
@@ -531,14 +552,7 @@ class CCPGraphWorkflow:
             confidence=1.0,
             duration_ms=(datetime.now() - start_time).total_seconds() * 1000,
         )
-        state["thought_chain"] = state.get("thought_chain", []) + [step]
-
-        self.thought_logger.log_transition(
-            state.get("cycle_id", ""),
-            prev_phase,
-            CCPPhase.CONTROL,
-            TransitionReason.COMMAND_ISSUED.value,
-        )
+        self._log_phase(state, step, prev_phase, CCPPhase.CONTROL, TransitionReason.COMMAND_ISSUED.value)
 
         return state
 
@@ -577,14 +591,7 @@ class CCPGraphWorkflow:
             confidence=1.0,
             duration_ms=(datetime.now() - start_time).total_seconds() * 1000,
         )
-        state["thought_chain"] = state.get("thought_chain", []) + [step]
-
-        self.thought_logger.log_transition(
-            state.get("cycle_id", ""),
-            prev_phase,
-            CCPPhase.LEARN,
-            TransitionReason.EXECUTION_COMPLETED.value,
-        )
+        self._log_phase(state, step, prev_phase, CCPPhase.LEARN, TransitionReason.EXECUTION_COMPLETED.value)
 
         return state
 

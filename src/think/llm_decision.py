@@ -1,9 +1,11 @@
 """
 LLM Decision Maker - LLM-based decision making for CCP Think layer
 """
+import hashlib
 import json
 import os
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional, Protocol
@@ -146,10 +148,17 @@ class LLMDecisionMaker:
         print(f"Confidence: {decision.confidence}")
     """
 
-    def __init__(self, config: Optional[LLMConfig] = None):
+    def __init__(
+        self,
+        config: Optional[LLMConfig] = None,
+        guard=None,
+        audit_logger=None,
+    ):
         self.config = config or LLMConfig()
+        self.guard = guard  # Optional LLMGuard
+        self.audit_logger = audit_logger  # Optional AuditLogger
         self._client = None
-        self._thought_history: list[ThoughtStep] = []
+        self._thought_history: deque[ThoughtStep] = deque(maxlen=1000)
 
     async def _get_client(self):
         """Get or create LLM client"""
@@ -200,22 +209,60 @@ class LLMDecisionMaker:
         start_time = datetime.now()
         step_id = f"thought_{state.get('task_id')}_{int(start_time.timestamp())}"
 
-        prompt = _build_decision_prompt(state, context)
+        # Build prompt: use guard if available, else raw
+        if self.guard:
+            prompt = self.guard.build_safe_prompt(state, context)
+        else:
+            prompt = _build_decision_prompt(state, context)
+
         inputs = {"state_summary": state.get("task_id"), "prompt_length": len(prompt)}
+        prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
 
-        try:
-            client = await self._get_client()
+        # Check and consume token budget atomically
+        session_id = state.get("task_id", "default")
+        if self.guard and not self.guard.try_consume(session_id, self.config.max_tokens):
+            logger.warning(f"Token budget exceeded for session {session_id}")
+            decision = Decision(
+                action="abort",
+                confidence=0.95,
+                reasoning="Token budget exceeded for this session",
+            )
+            outputs = {"budget_exceeded": True}
+        else:
+            try:
+                client = await self._get_client()
 
-            if client:
-                response = await self._call_llm(client, prompt)
-                decision, outputs = self._parse_response(response)
-            else:
-                # Fallback to rule-based decision
+                if client:
+                    response = await self._call_llm(client, prompt)
+
+                    # Validate output: use guard if available, else raw parse
+                    if self.guard:
+                        validation = self.guard.validate_output(response)
+                        if validation.is_valid and validation.parsed_data:
+                            decision = Decision(
+                                action=validation.parsed_data.get("action", "proceed"),
+                                params=validation.parsed_data.get("params", {}),
+                                confidence=float(validation.parsed_data.get("confidence", 0.5)),
+                                reasoning=validation.parsed_data.get("reasoning", "LLM decision"),
+                            )
+                            outputs = {
+                                "next_phase": validation.parsed_data.get("next_phase", "command"),
+                                "chain_of_thought": validation.parsed_data.get("chain_of_thought", []),
+                                "raw_response_hash": validation.raw_response_hash,
+                            }
+                        else:
+                            logger.warning(f"LLM output validation failed: {validation.errors}")
+                            decision, outputs = self._fallback_decision(state, context)
+                            outputs["validation_errors"] = validation.errors
+                    else:
+                        decision, outputs = self._parse_response(response)
+
+                else:
+                    decision, outputs = self._fallback_decision(state, context)
+
+            except Exception as e:
+                logger.error(f"LLM decision error: {e}")
                 decision, outputs = self._fallback_decision(state, context)
-
-        except Exception as e:
-            logger.error(f"LLM decision error: {e}")
-            decision, outputs = self._fallback_decision(state, context)
 
         duration_ms = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -231,6 +278,20 @@ class LLMDecisionMaker:
         )
 
         self._thought_history.append(thought)
+
+        # Audit logging
+        if self.audit_logger:
+            response_hash = outputs.get("raw_response_hash", hashlib.sha256(
+                json.dumps(outputs, default=str).encode()
+            ).hexdigest())
+            self.audit_logger.log_llm_call(
+                session_id=session_id,
+                prompt_hash=prompt_hash,
+                response_hash=response_hash,
+                action=decision.action,
+                confidence=decision.confidence,
+                tokens_used=self.config.max_tokens,
+            )
 
         return decision, thought
 

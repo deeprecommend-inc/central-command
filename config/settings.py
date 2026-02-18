@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # Channels - Webhook (comma-separated URLs)
     webhook_urls: str = Field(default="", env="WEBHOOK_URLS")
 
+    # Vault
+    vault_enabled: bool = Field(default=False, env="CCP_VAULT_ENABLED")
+    vault_dir: str = Field(default=".ccp_vault", env="CCP_VAULT_DIR")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -48,6 +52,19 @@ class Settings(BaseSettings):
         if not self.brightdata_username or not self.brightdata_password:
             return ""
         return f"http://{self.brightdata_username}:{self.brightdata_password}@{self.brightdata_host}:{self.brightdata_port}"
+
+
+    def load_from_vault(self) -> dict[str, str]:
+        """Load secrets from vault if enabled"""
+        if not self.vault_enabled:
+            return {}
+        try:
+            from src.security.vault import SecureVault
+            vault = SecureVault(vault_dir=self.vault_dir)
+            vault.init()
+            return vault.get_for_settings()
+        except Exception:
+            return {}
 
 
 settings = Settings()
