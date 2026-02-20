@@ -26,12 +26,15 @@ class LLMProvider(Protocol):
 @dataclass
 class LLMConfig:
     """Configuration for LLM decision maker"""
-    provider: str = "openai"  # openai, anthropic
+    provider: str = "openai"  # openai, anthropic, local
     model: str = "gpt-4o"
     temperature: float = 0.3
     max_tokens: int = 1024
     confidence_threshold: float = 0.7  # Below this, requires human approval
     enable_chain_of_thought: bool = True
+    # For local LLM servers (Ollama, LM Studio, vLLM, llama.cpp)
+    base_url: str = ""
+    api_key: str = ""
 
 
 DECISION_SYSTEM_PROMPT = """You are the Think layer of an AI Command System (CCP - Central Command Post).
@@ -165,7 +168,22 @@ class LLMDecisionMaker:
         if self._client:
             return self._client
 
-        if self.config.provider == "openai":
+        if self.config.provider == "local":
+            try:
+                from langchain_openai import ChatOpenAI
+                self._client = ChatOpenAI(
+                    model=self.config.model,
+                    temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
+                    base_url=self.config.base_url or "http://localhost:11434/v1",
+                    api_key=self.config.api_key or "not-needed",
+                )
+                logger.info(f"Local LLM: model={self.config.model}, base_url={self.config.base_url}")
+            except ImportError:
+                logger.warning("langchain-openai not installed, using fallback")
+                self._client = None
+
+        elif self.config.provider == "openai":
             try:
                 from langchain_openai import ChatOpenAI
                 self._client = ChatOpenAI(

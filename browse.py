@@ -50,20 +50,37 @@ def launch_browser(headless: bool = True) -> tuple[subprocess.Popen, str]:
     raise RuntimeError("Failed to start Chrome with CDP")
 
 
-def get_llm(model: str = "gpt-4o"):
-    """Get LLM based on model name"""
-    if model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
+def get_llm(model: str = "gpt-4o", base_url: str = ""):
+    """Get LLM based on model name and optional base_url for local models"""
+    if base_url:
+        # Local LLM via OpenAI-compatible API (Ollama, LM Studio, vLLM, etc.)
+        from browser_use import ChatOpenAI
+        return ChatOpenAI(
+            model=model,
+            base_url=base_url,
+            api_key=os.getenv("LLM_API_KEY", "not-needed"),
+        )
+    elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
         from browser_use.llm.openai.chat import ChatOpenAI
         return ChatOpenAI(model=model)
     elif model.startswith("claude"):
         from browser_use.llm.anthropic.chat import ChatAnthropic
         return ChatAnthropic(model=model)
     else:
+        # Treat unknown model names as local if LLM_BASE_URL is set
+        env_base_url = os.getenv("LLM_BASE_URL", "")
+        if env_base_url:
+            from browser_use import ChatOpenAI
+            return ChatOpenAI(
+                model=model,
+                base_url=env_base_url,
+                api_key=os.getenv("LLM_API_KEY", "not-needed"),
+            )
         from browser_use.llm.openai.chat import ChatOpenAI
         return ChatOpenAI(model=model)
 
 
-async def run(task: str, headless: bool = True, model: str = "gpt-4o"):
+async def run(task: str, headless: bool = True, model: str = "gpt-4o", base_url: str = ""):
     from browser_use import Agent
     from browser_use.browser.profile import BrowserProfile
 
@@ -73,7 +90,7 @@ async def run(task: str, headless: bool = True, model: str = "gpt-4o"):
     print(f"Browser ready: {ws_url[:50]}...")
 
     try:
-        llm = get_llm(model)
+        llm = get_llm(model, base_url)
         profile = BrowserProfile(cdp_url=ws_url)
         agent = Agent(task=task, llm=llm, browser_profile=profile)
 
@@ -93,28 +110,41 @@ Usage:
   python browse.py "<task>"
   python browse.py --show "<task>"
   python browse.py --model claude-sonnet-4-20250514 "<task>"
+  python browse.py --local "<task>"
+  python browse.py --local --model dolphin3 "<task>"
 
 Options:
   --show              Show browser window (not headless)
   --model <model>     LLM model (default: gpt-4o)
+  --local             Use local LLM (Ollama/LM Studio/vLLM)
+  --base-url <url>    Local LLM base URL (default: http://localhost:11434/v1)
 
-Models:
+Cloud Models:
   gpt-4o, gpt-4o-mini, o1, o3-mini
   claude-sonnet-4-20250514, claude-opus-4-20250514
+
+Local Models (via Ollama, LM Studio, vLLM, etc.):
+  dolphin3, hermes3, mythomax, llama3.1, wizardlm2, etc.
 
 Environment:
   OPENAI_API_KEY      Required for GPT/o1/o3 models
   ANTHROPIC_API_KEY   Required for Claude models
+  LLM_BASE_URL        Local LLM server URL (alternative to --base-url)
+  LLM_API_KEY         API key for local server (if required)
 
 Examples:
   python browse.py "Go to google.com and search for python"
   python browse.py --show "Open https://example.com"
   python browse.py --model claude-sonnet-4-20250514 "Search for AI news"
+  python browse.py --local "Go to example.com and get the title"
+  python browse.py --local --model dolphin3 "Search google for AI"
+  python browse.py --base-url http://localhost:1234/v1 --model hermes3 "Navigate to github.com"
 """)
         sys.exit(0)
 
     headless = True
     model = "gpt-4o"
+    base_url = ""
     args = sys.argv[1:]
 
     # Parse options
@@ -126,6 +156,13 @@ Examples:
         elif args[i] == "--model" and i + 1 < len(args):
             model = args[i + 1]
             i += 1
+        elif args[i] == "--local":
+            base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+            if model == "gpt-4o":
+                model = "dolphin3"
+        elif args[i] == "--base-url" and i + 1 < len(args):
+            base_url = args[i + 1]
+            i += 1
         else:
             filtered_args.append(args[i])
         i += 1
@@ -135,7 +172,7 @@ Examples:
         print("Error: task required")
         sys.exit(1)
 
-    asyncio.run(run(task, headless, model))
+    asyncio.run(run(task, headless, model, base_url))
 
 
 if __name__ == "__main__":

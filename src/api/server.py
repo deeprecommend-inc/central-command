@@ -106,9 +106,19 @@ class CCPState:
         self.websocket_clients: list[WebSocket] = []
         self._lock = asyncio.Lock()
 
-        # v2: LangGraph Workflow
+        # v2: LangGraph Workflow (reads LLM config from settings)
+        try:
+            from config.settings import settings as _settings
+            _llm_config = LLMConfig(
+                provider=_settings.llm_provider,
+                model=_settings.llm_model,
+                base_url=_settings.llm_base_url if _settings.llm_provider == "local" else "",
+                api_key=_settings.llm_api_key or _settings.openai_api_key or "",
+            )
+        except Exception:
+            _llm_config = LLMConfig(provider="openai", model="gpt-4o")
         self.workflow = CCPGraphWorkflow(
-            llm_config=LLMConfig(provider="openai", model="gpt-4o"),
+            llm_config=_llm_config,
             approval_config=ApprovalConfig(confidence_threshold=0.7),
             thought_log_dir="logs/thoughts",
         )

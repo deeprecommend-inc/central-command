@@ -32,6 +32,9 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
         "json": False,
         "verbose": False,
         "captcha_solver": "vision",
+        "llm_provider": get_env("LLM_PROVIDER", "openai"),
+        "llm_base_url": get_env("LLM_BASE_URL", ""),
+        "llm_model": get_env("LLM_MODEL", ""),
     }
 
     i = 0
@@ -55,6 +58,20 @@ def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
         elif arg == "--captcha-solver" and i + 1 < len(args):
             i += 1
             options["captcha_solver"] = args[i]
+        elif arg == "--local":
+            options["llm_provider"] = "local"
+            if not options["llm_base_url"]:
+                options["llm_base_url"] = "http://localhost:11434/v1"
+            if not options["llm_model"]:
+                options["llm_model"] = "dolphin3"
+        elif arg == "--llm-base-url" and i + 1 < len(args):
+            i += 1
+            options["llm_base_url"] = args[i]
+            if options["llm_provider"] == "openai":
+                options["llm_provider"] = "local"
+        elif arg == "--llm-model" and i + 1 < len(args):
+            i += 1
+            options["llm_model"] = args[i]
         else:
             remaining_args.append(arg)
         i += 1
@@ -149,14 +166,20 @@ async def run_ai_agent(
     task: str,
     proxy_type: str = "residential",
     captcha_solver: str = "vision",
+    llm_provider: str = "openai",
+    llm_base_url: str = "",
+    llm_model: str = "",
 ):
     """Run AI-driven browser-use agent with CAPTCHA support"""
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
 
-    openai_key = get_env("OPENAI_API_KEY")
-    if not openai_key:
-        logger.error("OPENAI_API_KEY is required for AI agent")
+    # Resolve API key
+    api_key = get_env("LLM_API_KEY") or get_env("OPENAI_API_KEY")
+    if not api_key and llm_provider != "local":
+        logger.error("API key required (set LLM_API_KEY or OPENAI_API_KEY, or use --local for local LLM)")
         sys.exit(1)
+
+    model = llm_model or get_env("OPENAI_MODEL", "gpt-4o")
 
     config = BrowserUseConfig(
         brightdata_username=get_env("BRIGHTDATA_USERNAME"),
@@ -164,8 +187,11 @@ async def run_ai_agent(
         brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
         brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
         proxy_type=proxy_type,
-        openai_api_key=openai_key,
-        model=get_env("OPENAI_MODEL", "gpt-4o"),
+        llm_provider=llm_provider,
+        llm_api_key=api_key,
+        llm_base_url=llm_base_url,
+        openai_api_key=api_key,
+        model=model,
         headless=get_env("HEADLESS", "true").lower() == "true",
         captcha_solver=captcha_solver,
     )
@@ -177,6 +203,13 @@ async def run_ai_agent(
         logger.info(f"Task completed successfully")
     else:
         logger.error(f"Task failed: {result.get('error')}")
+
+    # Display human score
+    hs = result.get("human_score")
+    if hs:
+        _print_human_score(hs)
+
+    if not result.get("success"):
         sys.exit(1)
 
 
@@ -184,14 +217,19 @@ async def run_parallel_ai(
     tasks: list[str],
     proxy_type: str = "residential",
     captcha_solver: str = "vision",
+    llm_provider: str = "openai",
+    llm_base_url: str = "",
+    llm_model: str = "",
 ):
     """Run multiple AI tasks in parallel with CAPTCHA support"""
     from src.browser_use_agent import BrowserUseAgent, BrowserUseConfig
 
-    openai_key = get_env("OPENAI_API_KEY")
-    if not openai_key:
-        logger.error("OPENAI_API_KEY is required for AI agent")
+    api_key = get_env("LLM_API_KEY") or get_env("OPENAI_API_KEY")
+    if not api_key and llm_provider != "local":
+        logger.error("API key required (set LLM_API_KEY or OPENAI_API_KEY, or use --local for local LLM)")
         sys.exit(1)
+
+    model = llm_model or get_env("OPENAI_MODEL", "gpt-4o")
 
     config = BrowserUseConfig(
         brightdata_username=get_env("BRIGHTDATA_USERNAME"),
@@ -199,8 +237,11 @@ async def run_parallel_ai(
         brightdata_host=get_env("BRIGHTDATA_HOST", "brd.superproxy.io"),
         brightdata_port=int(get_env("BRIGHTDATA_PORT", "22225")),
         proxy_type=proxy_type,
-        openai_api_key=openai_key,
-        model=get_env("OPENAI_MODEL", "gpt-4o"),
+        llm_provider=llm_provider,
+        llm_api_key=api_key,
+        llm_base_url=llm_base_url,
+        openai_api_key=api_key,
+        model=model,
         headless=get_env("HEADLESS", "true").lower() == "true",
         captcha_solver=captcha_solver,
     )
@@ -211,6 +252,58 @@ async def run_parallel_ai(
 
     success_count = sum(1 for r in results if r.get("success"))
     logger.info(f"Completed: {success_count}/{len(tasks)} tasks successful")
+
+
+def _print_human_score(hs: dict) -> None:
+    """Print human-likeness score summary"""
+    score = hs.get("score", 0)
+    max_score = hs.get("max", 100)
+    is_human = hs.get("is_human", False)
+    verdict = "PASS" if is_human else "FAIL"
+    print(f"\nHuman Score: {score}/{max_score} [{verdict}]")
+    metrics = hs.get("metrics", {})
+    if metrics:
+        for mid, m in metrics.items():
+            flag = "OK" if m.get("pass") else "NG"
+            print(f"  {mid}: {m.get('value', 0):.4f} [{flag}] +{m.get('points', 0)}")
+
+
+async def run_score_demo():
+    """Run a human-likeness score demo with synthetic data"""
+    import random
+    from src.human_score import HumanScoreTracker
+
+    tracker = HumanScoreTracker()
+    base = tracker._start
+
+    # Simulate 30 actions over 10 minutes with natural variation
+    action_types = ["click", "scroll", "type", "navigate", "search", "hover", "wait"]
+    t = base
+    for i in range(30):
+        t += random.uniform(5, 45)  # 5-45 seconds between actions
+        action = random.choice(action_types)
+        tracker.record_action(action, timestamp=t)
+
+    # Simulate 8 page visits
+    for i in range(8):
+        tracker.record_page_visit(
+            url=f"https://example.com/page{i}",
+            dwell_sec=random.uniform(3, 120),
+            completed=random.random() < 0.5,
+            bounced=random.random() < 0.15,
+            clicked=random.random() < 0.4,
+        )
+
+    # Simulate IP/fingerprint
+    tracker.record_ip(ip="203.0.113.1", country="us", fingerprint_hash="abc123")
+    tracker.record_ip(ip="203.0.113.2", country="us", fingerprint_hash="def456")
+
+    # Simulate outcomes
+    for _ in range(5):
+        tracker.record_outcome(random.choice(["success", "partial", "skip"]))
+
+    report = tracker.compute()
+    print(report)
 
 
 def print_usage():
@@ -224,6 +317,7 @@ Commands:
   url <url> [url2...]     Navigate to URL(s) with proxy/UA rotation
   health                  Check proxy health status
   ai <task>               Run AI-driven task with CAPTCHA support
+  score                   Run human-likeness score demo with synthetic data
   notify <text>           Send notification via channel
   channels                List registered notification channels
   vault <subcmd>          Manage encrypted credential vault
@@ -236,6 +330,11 @@ Proxy Options:
   --datacenter, -d        Use datacenter IP
   --isp, -i               Use ISP IP
   --no-proxy              Disable proxy (direct connection)
+
+LLM Options:
+  --local                 Use local LLM (Ollama/LM Studio/vLLM, no API key needed)
+  --llm-base-url <url>    Local LLM server URL (default: http://localhost:11434/v1)
+  --llm-model <model>     LLM model name (e.g. dolphin3, hermes3, mythomax)
 
 CAPTCHA Options:
   --captcha-solver <type> CAPTCHA solver: vision (default), 2captcha, anti-captcha
@@ -251,23 +350,38 @@ Notify Options:
 Examples:
   python run.py url https://httpbin.org/ip
   python run.py url --mobile https://example.com
-  python run.py url -r https://google.com https://github.com
   python run.py url --no-proxy https://example.com
   python run.py health --mobile
   python run.py demo --no-proxy
+
+  # Cloud LLM
   python run.py ai "Go to example.com and solve the CAPTCHA" --no-proxy
   python run.py ai --captcha-solver 2captcha "Navigate to site and login"
+
+  # Local LLM (no API key required)
+  python run.py ai --local "Go to example.com and get the page title"
+  python run.py ai --local --llm-model hermes3 "Search google for AI news"
+  python run.py ai --llm-base-url http://localhost:1234/v1 --llm-model dolphin3 "Navigate to github.com"
+  python run.py parallel --local "task 1" "task 2" "task 3"
+
+  # Notifications
   python run.py channels
   python run.py notify --channel slack --to "#general" "Alert message"
   python run.py notify --channel webhook --to "https://httpbin.org/post" "Test"
+
+  # Vault
   python run.py vault init
   python run.py vault set API_KEY sk-12345
   python run.py vault get API_KEY
-  python run.py vault list
-  python run.py vault delete API_KEY
-  python run.py vault rotate
 
 Environment Variables:
+  LLM_PROVIDER            LLM provider: openai, anthropic, local (default: openai)
+  LLM_BASE_URL            Local LLM server URL (for local provider)
+  LLM_MODEL               LLM model name
+  LLM_API_KEY             LLM API key (not needed for local)
+  OPENAI_API_KEY          OpenAI API key (legacy, fallback for LLM_API_KEY)
+  OPENAI_MODEL            OpenAI model (legacy, fallback for LLM_MODEL)
+  ANTHROPIC_API_KEY       Anthropic API key (for Claude models)
   BRIGHTDATA_USERNAME     BrightData proxy username (optional)
   BRIGHTDATA_PASSWORD     BrightData proxy password (optional)
   BRIGHTDATA_PROXY_TYPE   residential (default), datacenter, mobile, isp
@@ -275,8 +389,6 @@ Environment Variables:
   HEADLESS                Run headless (default: true)
   LOG_FORMAT              Logging format: json or text (default: text)
   LOG_LEVEL               Log level: DEBUG, INFO, WARNING, ERROR (default: INFO)
-  OPENAI_API_KEY          OpenAI API key (required for ai command, Vision CAPTCHA)
-  OPENAI_MODEL            OpenAI model (default: gpt-4o)
   TWOCAPTCHA_API_KEY      2captcha API key (optional fallback)
   ANTICAPTCHA_API_KEY     Anti-Captcha API key (optional fallback)
   SLACK_WEBHOOK_URL       Slack Incoming Webhook URL
@@ -290,7 +402,14 @@ Environment Variables:
   EMAIL_FROM              Sender email address
   WEBHOOK_URLS            Comma-separated webhook URLs
 
-Note: BRIGHTDATA settings are optional. Without them, the agent runs with direct connection.
+Supported Local LLM Servers:
+  Ollama          http://localhost:11434/v1   ollama serve
+  LM Studio       http://localhost:1234/v1    Start server in LM Studio
+  vLLM            http://localhost:8000/v1    vllm serve <model>
+  llama.cpp       http://localhost:8080/v1    llama-server -m <model>
+  LocalAI         http://localhost:8080/v1    local-ai
+
+Note: BRIGHTDATA and LLM API keys are optional. Use --local for API-key-free operation.
 """)
 
 
@@ -433,13 +552,22 @@ def main():
             print("Error: Task description required")
             sys.exit(1)
         task = " ".join(args)
-        asyncio.run(run_ai_agent(task, proxy_type, options["captcha_solver"]))
+        asyncio.run(run_ai_agent(
+            task, proxy_type, options["captcha_solver"],
+            options["llm_provider"], options["llm_base_url"], options["llm_model"],
+        ))
 
     elif command == "parallel":
         if len(args) < 1:
             print("Error: Tasks required")
             sys.exit(1)
-        asyncio.run(run_parallel_ai(args, proxy_type, options["captcha_solver"]))
+        asyncio.run(run_parallel_ai(
+            args, proxy_type, options["captcha_solver"],
+            options["llm_provider"], options["llm_base_url"], options["llm_model"],
+        ))
+
+    elif command == "score":
+        asyncio.run(run_score_demo())
 
     elif command == "notify":
         # Parse --channel and --to

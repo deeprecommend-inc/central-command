@@ -23,6 +23,7 @@ from browser_use import Agent, BrowserProfile, BrowserSession, Tools, ActionResu
 
 from .proxy_manager import ProxyManager, ProxyType
 from .ua_manager import UserAgentManager
+from .human_score import HumanScoreTracker, HumanScoreReport
 from .command.captcha_solver import (
     CaptchaDetector,
     CaptchaType,
@@ -204,15 +205,31 @@ class BrowserUseConfig:
     brightdata_port: int = 22225
     proxy_type: str = "residential"
 
-    # OpenAI settings
-    openai_api_key: str = ""
+    # LLM settings
+    llm_provider: str = "openai"  # openai, anthropic, local
+    llm_api_key: str = ""
+    llm_base_url: str = ""  # For local LLM (Ollama, LM Studio, vLLM, etc.)
     model: str = "gpt-4o"
+
+    # Legacy: kept for backward compatibility
+    openai_api_key: str = ""
 
     # Browser settings
     headless: bool = True
 
     # CAPTCHA solver preference
     captcha_solver: str = "vision"
+
+    @property
+    def effective_api_key(self) -> str:
+        """Get effective API key (llm_api_key > openai_api_key > 'not-needed' for local)"""
+        if self.llm_api_key:
+            return self.llm_api_key
+        if self.openai_api_key:
+            return self.openai_api_key
+        if self.llm_provider == "local":
+            return "not-needed"
+        return ""
 
 
 class BrowserUseAgent:
@@ -261,10 +278,7 @@ class BrowserUseAgent:
         self.ua_manager = UserAgentManager()
 
         # Initialize LLM
-        self.llm = ChatOpenAI(
-            model=config.model,
-            api_key=config.openai_api_key,
-        )
+        self.llm = self._create_llm(config)
 
         self._session_counter = 0
 
@@ -273,6 +287,42 @@ class BrowserUseAgent:
 
         # Create custom tools with CAPTCHA actions
         self.tools = self._create_tools()
+
+    @staticmethod
+    def _create_llm(config: BrowserUseConfig):
+        """Create LLM instance based on provider configuration"""
+        if config.llm_provider == "local":
+            base_url = config.llm_base_url or "http://localhost:11434/v1"
+            llm = ChatOpenAI(
+                model=config.model,
+                api_key=config.effective_api_key,
+                base_url=base_url,
+            )
+            logger.info(f"LLM: local model={config.model}, base_url={base_url}")
+            return llm
+
+        if config.llm_provider == "anthropic":
+            try:
+                from browser_use.llm.anthropic.chat import ChatAnthropic
+                llm = ChatAnthropic(
+                    model=config.model,
+                    api_key=config.effective_api_key,
+                )
+                logger.info(f"LLM: anthropic model={config.model}")
+                return llm
+            except ImportError:
+                logger.warning("browser_use anthropic not available, falling back to OpenAI-compatible")
+
+        # Default: OpenAI (also works for OpenAI-compatible servers with base_url)
+        kwargs = {
+            "model": config.model,
+            "api_key": config.effective_api_key,
+        }
+        if config.llm_base_url:
+            kwargs["base_url"] = config.llm_base_url
+        llm = ChatOpenAI(**kwargs)
+        logger.info(f"LLM: {config.llm_provider} model={config.model}")
+        return llm
 
     @staticmethod
     def _test_proxy_connectivity(config: BrowserUseConfig) -> bool:
@@ -302,12 +352,27 @@ class BrowserUseAgent:
         self.captcha_detector = CaptchaDetector()
         self.captcha_solvers: list[CaptchaSolver] = []
 
-        # Vision LLM (priority)
-        if self.config.openai_api_key:
+        # Vision LLM (priority) - works with OpenAI or local vision-capable models
+        vision_api_key = self.config.effective_api_key
+        if vision_api_key and vision_api_key != "not-needed":
             self.captcha_solvers.append(
-                VisionCaptchaSolver(api_key=self.config.openai_api_key)
+                VisionCaptchaSolver(
+                    api_key=vision_api_key,
+                    model=self.config.model,
+                    base_url=self.config.llm_base_url if self.config.llm_provider == "local" else "",
+                )
             )
-            logger.info("CAPTCHA solver: Vision (GPT-4o) enabled")
+            logger.info(f"CAPTCHA solver: Vision ({self.config.model}) enabled")
+        elif self.config.llm_provider == "local":
+            # Local models may support vision via OpenAI-compatible API
+            self.captcha_solvers.append(
+                VisionCaptchaSolver(
+                    api_key="not-needed",
+                    model=self.config.model,
+                    base_url=self.config.llm_base_url or "http://localhost:11434/v1",
+                )
+            )
+            logger.info(f"CAPTCHA solver: Vision (local: {self.config.model}) enabled")
 
         # 2captcha (fallback)
         twocaptcha_key = os.getenv("TWOCAPTCHA_API_KEY", "")
@@ -487,11 +552,16 @@ class BrowserUseAgent:
 
         Launches Chrome via CDP for reliable startup, then runs browser-use Agent.
         Proxy auth is handled via a temporary Chrome extension.
+        Computes a human-likeness score from session behavior.
         """
         logger.info(f"Running task: {task[:100]}...")
 
+        tracker = HumanScoreTracker()
         proxy_server, user_agent, extension_dir = self._get_launch_params()
         proc = None
+
+        # Record IP/fingerprint from current proxy + UA
+        self._record_session_fingerprint(tracker, user_agent)
 
         try:
             # Launch Chrome with CDP
@@ -517,18 +587,28 @@ class BrowserUseAgent:
 
             result = await agent.run()
 
+            # Harvest actions from agent history for human score
+            self._harvest_agent_history(agent, tracker)
+
+            # Compute human score
+            score_report = tracker.compute()
+            logger.info(f"Human score: {score_report.total_score}/{score_report.max_score}")
+
             return {
                 "success": True,
                 "result": result,
                 "task": task,
+                "human_score": score_report.summary(),
             }
 
         except Exception as e:
             logger.error(f"Task failed: {e}")
+            score_report = tracker.compute()
             return {
                 "success": False,
                 "error": str(e),
                 "task": task,
+                "human_score": score_report.summary(),
             }
         finally:
             if proc:
@@ -540,6 +620,64 @@ class BrowserUseAgent:
             # Clean up proxy auth extension
             if extension_dir and os.path.isdir(extension_dir):
                 shutil.rmtree(extension_dir, ignore_errors=True)
+
+    def _record_session_fingerprint(self, tracker: HumanScoreTracker, user_agent: str) -> None:
+        """Record IP and fingerprint data from current proxy/UA configuration"""
+        import hashlib
+        fp_hash = hashlib.sha256(user_agent.encode()).hexdigest()[:16] if user_agent else ""
+        country = ""
+        ip = "direct"
+        if self.proxy_manager:
+            proxy = self.proxy_manager.get_proxy(new_session=False)
+            country = proxy.country or ""
+            ip = f"{self.config.brightdata_host}:{self.config.brightdata_port}"
+        tracker.record_ip(ip=ip, country=country, fingerprint_hash=fp_hash)
+
+    @staticmethod
+    def _harvest_agent_history(agent: Agent, tracker: HumanScoreTracker) -> None:
+        """Extract action events from browser-use Agent history into the tracker"""
+        try:
+            history = agent.history if hasattr(agent, "history") else None
+            if not history:
+                return
+            items = history.history if hasattr(history, "history") else []
+            base_time = time.time() - len(items) * 2  # approximate timestamps
+            for i, item in enumerate(items):
+                ts = base_time + i * 2  # ~2s per action as approximation
+                # Extract action type from history item
+                action_name = "unknown"
+                if hasattr(item, "model_output") and item.model_output:
+                    output = item.model_output
+                    if hasattr(output, "action") and output.action:
+                        actions = output.action if isinstance(output.action, list) else [output.action]
+                        for act in actions:
+                            if hasattr(act, "model_dump"):
+                                d = act.model_dump(exclude_none=True)
+                                if d:
+                                    action_name = next(iter(d.keys()), "unknown")
+                            elif isinstance(act, dict):
+                                action_name = next(iter(act.keys()), "unknown")
+                tracker.record_action(action_name, timestamp=ts)
+
+                # Extract page visit data from result
+                if hasattr(item, "result") and item.result:
+                    results = item.result if isinstance(item.result, list) else [item.result]
+                    for res in results:
+                        url = ""
+                        if hasattr(res, "current_url"):
+                            url = res.current_url or ""
+                        elif hasattr(res, "extracted_content") and res.extracted_content:
+                            url = str(res.extracted_content)[:200]
+                        if url:
+                            # Dwell approximation: 2s per step
+                            tracker.record_page_visit(
+                                url=url, dwell_sec=2.0,
+                                completed=not (hasattr(res, "error") and res.error),
+                                bounced=False,
+                                clicked=action_name in ("click_element", "click", "input_text"),
+                            )
+        except Exception as e:
+            logger.debug(f"History harvest: {e}")
 
     async def run_parallel(self, tasks: list[str], max_concurrent: int = 5) -> list[dict]:
         """

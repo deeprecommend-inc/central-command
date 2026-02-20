@@ -18,8 +18,18 @@ class Settings(BaseSettings):
     headless: bool = Field(default=True, env="HEADLESS")
     parallel_sessions: int = Field(default=5, env="PARALLEL_SESSIONS")
 
-    # OpenAI
+    # LLM Configuration
+    # provider: openai, anthropic, local (OpenAI-compatible local server)
+    llm_provider: str = Field(default="openai", env="LLM_PROVIDER")
+    # base_url for local LLM servers (Ollama, LM Studio, vLLM, llama.cpp, etc.)
+    # Examples: http://localhost:11434/v1 (Ollama), http://localhost:1234/v1 (LM Studio)
+    llm_base_url: str = Field(default="http://localhost:11434/v1", env="LLM_BASE_URL")
+    llm_model: str = Field(default="gpt-4o", env="LLM_MODEL")
+    llm_api_key: str = Field(default="", env="LLM_API_KEY")
+
+    # OpenAI (legacy, used as fallback if LLM_API_KEY not set)
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
+    anthropic_api_key: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
 
     # Channels - Slack
     slack_webhook_url: str = Field(default="", env="SLACK_WEBHOOK_URL")
@@ -42,6 +52,13 @@ class Settings(BaseSettings):
     # Vault
     vault_enabled: bool = Field(default=False, env="CCP_VAULT_ENABLED")
     vault_dir: str = Field(default=".ccp_vault", env="CCP_VAULT_DIR")
+
+    # CAPTCHA
+    captcha_provider: str = Field(default="", env="CAPTCHA_PROVIDER")
+    captcha_api_key: str = Field(default="", env="CAPTCHA_API_KEY")
+
+    # Redis
+    redis_url: str = Field(default="", env="REDIS_URL")
 
     class Config:
         env_file = ".env"

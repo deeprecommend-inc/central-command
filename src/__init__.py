@@ -10,6 +10,7 @@ from .ua_manager import UserAgentManager
 from .browser_worker import BrowserWorker, WorkerResult, ErrorType
 from .parallel_controller import ParallelController, TaskResult
 from .browser_use_agent import BrowserUseAgent
+from .human_score import HumanScoreTracker, HumanScoreReport, MetricResult
 from .logging_config import configure_logging
 from .rate_limiter import TokenBucketRateLimiter, DomainRateLimiter
 from .session_manager import SessionManager, SessionData
@@ -96,6 +97,9 @@ __all__ = [
     "ParallelController",
     "TaskResult",
     "BrowserUseAgent",
+    "HumanScoreTracker",
+    "HumanScoreReport",
+    "MetricResult",
     "configure_logging",
     "TokenBucketRateLimiter",
     "DomainRateLimiter",

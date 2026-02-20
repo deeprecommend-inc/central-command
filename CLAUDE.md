@@ -93,7 +93,14 @@ CCPは、点在するデータ、分断された判断、属人化した運用�
 # 基本
 python run.py url https://example.com
 
-# 住宅IP（デフォルト）
+# ローカルLLM（API Key不要）
+python run.py ai --local "Go to example.com and get the title" --no-proxy
+python run.py ai --local --llm-model hermes3 "Search for AI news" --no-proxy
+
+# クラウドLLM
+python run.py ai "Go to example.com" --no-proxy
+
+# 住宅IP
 python run.py url -r https://example.com
 
 # モバイルIP
@@ -115,11 +122,19 @@ python run.py demo --no-proxy
 | `--datacenter` | `-d` | データセンターIP |
 | `--isp` | `-i` | ISP IP |
 | `--no-proxy` | - | 直接接続 |
+| `--local` | - | ローカルLLM使用（API Key不要） |
+| `--llm-base-url` | - | ローカルLLMサーバーURL |
+| `--llm-model` | - | LLMモデル名 |
 
 ## 環境変数
 
 | 変数 | 必須 | 説明 |
 |------|------|------|
+| LLM_PROVIDER | No | openai/anthropic/local（デフォルト: openai） |
+| LLM_BASE_URL | No | ローカルLLMサーバーURL |
+| LLM_MODEL | No | LLMモデル名 |
+| LLM_API_KEY | No | LLM APIキー（local時は不要） |
+| OPENAI_API_KEY | No | OpenAI APIキー（レガシー、LLM_API_KEYのフォールバック） |
 | BRIGHTDATA_USERNAME | No | BrightDataユーザー名（未設定時は直接接続） |
 | BRIGHTDATA_PASSWORD | No | BrightDataパスワード |
 | BRIGHTDATA_PROXY_TYPE | No | residential/datacenter/mobile/isp |

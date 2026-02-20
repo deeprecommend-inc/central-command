@@ -39,10 +39,12 @@ class VisionCaptchaSolver(CaptchaSolver):
         api_key: str,
         model: str = "gpt-4o",
         timeout: float = 30.0,
+        base_url: str = "",
     ):
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        self._base_url = base_url
 
     def supports(self, captcha_type: CaptchaType) -> bool:
         return captcha_type in self.SUPPORTED_TYPES
@@ -64,7 +66,10 @@ class VisionCaptchaSolver(CaptchaSolver):
             image_b64 = base64.b64encode(captcha.image_data).decode()
             prompt = self._build_prompt(captcha.captcha_type)
 
-            client = openai.AsyncOpenAI(api_key=self._api_key)
+            client_kwargs = {"api_key": self._api_key}
+            if self._base_url:
+                client_kwargs["base_url"] = self._base_url
+            client = openai.AsyncOpenAI(**client_kwargs)
             response = await client.chat.completions.create(
                 model=self._model,
                 messages=[
