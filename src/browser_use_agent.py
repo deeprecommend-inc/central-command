@@ -233,6 +233,11 @@ class BrowserUseConfig:
 
     # Browser settings
     headless: bool = True
+    use_vision: bool = True  # Auto-disabled for local LLM
+
+    # Timeout settings (seconds)
+    llm_timeout: int = 300  # 5 minutes for local LLM
+    step_timeout: int = 600  # 10 minutes per step
 
     # CAPTCHA solver preference
     captcha_solver: str = "vision"
@@ -680,13 +685,21 @@ class BrowserUseAgent:
             # Create browser profile with CDP URL
             browser_profile = BrowserProfile(cdp_url=ws_url, headless=self.config.headless)
 
+            # Auto-disable vision for local LLM (screenshot processing is too slow)
+            use_vision = self.config.use_vision
+            if self.config.llm_provider == "local" and use_vision:
+                logger.info("Vision auto-disabled for local LLM (use USE_VISION=true to override)")
+                use_vision = False
+
             agent = Agent(
                 task=task,
                 llm=self.llm,
                 browser_profile=browser_profile,
                 tools=self.tools,
                 extend_system_message=CAPTCHA_SYSTEM_PROMPT,
-                use_vision=True,
+                use_vision=use_vision,
+                llm_timeout=self.config.llm_timeout,
+                step_timeout=self.config.step_timeout,
             )
 
             result = await agent.run()

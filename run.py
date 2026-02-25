@@ -21,7 +21,7 @@ from loguru import logger
 
 
 def get_env(key: str, default: str = "") -> str:
-    return os.getenv(key, default)
+    return os.getenv(key, default) or default
 
 
 def parse_args(args: list[str]) -> tuple[str, list[str], dict]:
@@ -222,7 +222,10 @@ async def run_ai_agent(
         openai_api_key=api_key,
         model=model,
         headless=get_env("HEADLESS", "true").lower() == "true",
+        use_vision=get_env("USE_VISION", "true").lower() == "true",
         captcha_solver=captcha_solver,
+        llm_timeout=int(get_env("LLM_TIMEOUT", "300")),
+        step_timeout=int(get_env("STEP_TIMEOUT", "600")),
     )
 
     agent = BrowserUseAgent(config)
@@ -282,7 +285,10 @@ async def run_parallel_ai(
         openai_api_key=api_key,
         model=model,
         headless=get_env("HEADLESS", "true").lower() == "true",
+        use_vision=get_env("USE_VISION", "true").lower() == "true",
         captcha_solver=captcha_solver,
+        llm_timeout=int(get_env("LLM_TIMEOUT", "300")),
+        step_timeout=int(get_env("STEP_TIMEOUT", "600")),
     )
 
     agent = BrowserUseAgent(config)
