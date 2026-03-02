@@ -1,5 +1,9 @@
 # CCP - Central Command Post
 
+<p align="center">
+  <img src="public/logo.png" alt="CCP Logo" width="200">
+</p>
+
 An AI-powered command center that automates decision-making and execution for industrial operations.
 
 CCP integrates scattered data, fragmented decisions, and manual operations into a unified pipeline:
